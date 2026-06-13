@@ -7,9 +7,12 @@ import httpx
 import jwt
 import pytest
 
+from app.config import settings
 from app.main import create_app
 from app.products import (
+    BlockingReason,
     Category,
+    FieldReport,
     InMemoryProductRepository,
     Product,
     ProductImage,
@@ -38,6 +41,10 @@ def auth_headers(seller_id: str = SELLER_ID) -> dict[str, str]:
         algorithm="HS256",
     )
     return {"Authorization": f"Bearer {token}"}
+
+
+def service_headers() -> dict[str, str]:
+    return {"X-Service-Key": settings.mod_to_b2b_key}
 
 
 @pytest.fixture
@@ -78,6 +85,8 @@ async def seed_product(
     status: ProductStatus = ProductStatus.CREATED,
     seller_id: str = SELLER_ID,
     product_id: str | None = None,
+    blocking_reason: BlockingReason | None = None,
+    field_reports: tuple[FieldReport, ...] = (),
 ) -> Product:
     product = Product(
         id=product_id or str(uuid4()),
@@ -91,6 +100,8 @@ async def seed_product(
         images=(ProductImage(id=str(uuid4()), url="/s3/iphone15-front.jpg", ordering=0),),
         characteristics=(),
         skus=(),
+        blocking_reason=blocking_reason,
+        field_reports=field_reports,
     )
     return await repository.create_product(product)
 

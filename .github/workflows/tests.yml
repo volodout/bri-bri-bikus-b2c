@@ -49,5 +49,13 @@ jobs:
             tests/test_edit.py::test_edit_hard_blocked_returns_403 \
             tests/test_edit.py::test_edit_others_product_returns_403
 
+      - name: Run contract 05 tests
+        run: |
+          pytest -v \
+            tests/test_view.py::test_get_moderated_product_returns_full_payload \
+            tests/test_view.py::test_get_blocked_product_returns_blocking_reason_and_field_reports \
+            tests/test_view.py::test_get_others_product_returns_404 \
+            tests/test_view.py::test_get_nonexistent_returns_404
+
       - name: Run full test suite
         run: pytest -v

@@ -26,6 +26,22 @@ def seller_id_from_jwt(request: Request) -> str:
         raise Unauthorized("Invalid token")
 
 
+def viewer_from_request(request: Request) -> str | None:
+    """Resolve the caller of GET /products/{id}.
+
+    Returns the seller id for seller-cabinet mode, or None for a trusted
+    inter-service call (Moderation) authenticated via ``X-Service-Key``. The
+    caller treats ``None`` as "skip the ownership check". Raises Unauthorized
+    when neither credential is valid.
+    """
+    service_key = request.headers.get("X-Service-Key")
+    if service_key is not None:
+        if service_key != settings.mod_to_b2b_key:
+            raise Unauthorized("Invalid service key")
+        return None
+    return seller_id_from_jwt(request)
+
+
 def _claims_from_request(request: Request) -> dict[str, Any]:
     authorization = request.headers.get("Authorization")
     if not authorization:
