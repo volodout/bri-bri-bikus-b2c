@@ -17,6 +17,7 @@ from app.moderation import HttpModerationGateway, ModerationGateway
 from app.products import PostgresProductRepository, ProductRepository, ProductService
 from app.routes import products, skus
 from app.skus import PostgresSkuRepository, SkuRepository, SkuService
+from app.views import ProductViewService
 
 
 def create_app(
@@ -48,6 +49,7 @@ def create_app(
     app.state.sku_repository = sku_repo
     app.state.product_service = ProductService(repository, gateway)
     app.state.sku_service = SkuService(repository, sku_repo, gateway)
+    app.state.product_view_service = ProductViewService(repository, sku_repo)
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)

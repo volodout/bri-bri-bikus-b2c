@@ -59,6 +59,20 @@ class ProductCreate:
 
 
 @dataclass(frozen=True)
+class BlockingReason:
+    id: str
+    title: str
+    comment: str
+
+
+@dataclass(frozen=True)
+class FieldReport:
+    field_name: str
+    sku_id: str | None
+    comment: str
+
+
+@dataclass(frozen=True)
 class Product:
     id: str
     seller_id: str
@@ -73,6 +87,8 @@ class Product:
     skus: tuple[dict[str, Any], ...] = ()
     created_at: datetime = field(default_factory=_utcnow)
     updated_at: datetime = field(default_factory=_utcnow)
+    blocking_reason: BlockingReason | None = None
+    field_reports: tuple[FieldReport, ...] = ()
 
 
 class ProductRepository(Protocol):
@@ -313,7 +329,30 @@ class PostgresProductRepository:
                 """,
                 UUID(product_id),
             )
-        return _product_from_rows(product_row, image_rows, characteristic_rows)
+            blocking_reason_row = await connection.fetchrow(
+                """
+                SELECT reason_id::text, title, comment
+                FROM product_blocking_reasons
+                WHERE product_id = $1
+                """,
+                UUID(product_id),
+            )
+            field_report_rows = await connection.fetch(
+                """
+                SELECT field_name, sku_id::text, comment
+                FROM product_field_reports
+                WHERE product_id = $1
+                ORDER BY id ASC
+                """,
+                UUID(product_id),
+            )
+        return _product_from_rows(
+            product_row,
+            image_rows,
+            characteristic_rows,
+            blocking_reason_row,
+            field_report_rows,
+        )
 
     async def update_product(self, product: Product) -> Product:
         # Status is left untouched here; the re-moderation transition is applied
@@ -520,7 +559,20 @@ def _serialize_datetime(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _product_from_rows(product_row: Any, image_rows: Iterable[Any], characteristic_rows: Iterable[Any]) -> Product:
+def _product_from_rows(
+    product_row: Any,
+    image_rows: Iterable[Any],
+    characteristic_rows: Iterable[Any],
+    blocking_reason_row: Any = None,
+    field_report_rows: Iterable[Any] = (),
+) -> Product:
+    blocking_reason = None
+    if blocking_reason_row is not None:
+        blocking_reason = BlockingReason(
+            id=str(blocking_reason_row["reason_id"]),
+            title=blocking_reason_row["title"],
+            comment=blocking_reason_row["comment"],
+        )
     return Product(
         id=str(product_row["id"]),
         seller_id=str(product_row["seller_id"]),
@@ -541,6 +593,15 @@ def _product_from_rows(product_row: Any, image_rows: Iterable[Any], characterist
         skus=(),
         created_at=_parse_datetime(product_row["created_at"]),
         updated_at=_parse_datetime(product_row["updated_at"]),
+        blocking_reason=blocking_reason,
+        field_reports=tuple(
+            FieldReport(
+                field_name=row["field_name"],
+                sku_id=str(row["sku_id"]) if row["sku_id"] is not None else None,
+                comment=row["comment"],
+            )
+            for row in field_report_rows
+        ),
     )
 
 
