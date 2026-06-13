@@ -98,6 +98,8 @@ class ProductRepository(Protocol):
 
     async def get_product(self, product_id: str) -> Product | None: ...
 
+    async def list_products(self) -> tuple[Product, ...]: ...
+
     async def update_product(self, product: Product) -> Product: ...
 
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None: ...
@@ -221,6 +223,9 @@ class InMemoryProductRepository:
 
     async def get_product(self, product_id: str) -> Product | None:
         return self._products.get(product_id)
+
+    async def list_products(self) -> tuple[Product, ...]:
+        return tuple(self._products.values())
 
     async def update_product(self, product: Product) -> Product:
         self._products[product.id] = product
@@ -377,6 +382,53 @@ class PostgresProductRepository:
             characteristic_rows,
             blocking_reason_row,
             field_report_rows,
+        )
+
+    async def list_products(self) -> tuple[Product, ...]:
+        # Catalog short view only needs product + images; characteristics and
+        # blocking data are omitted here for cheapness.
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            product_rows = await connection.fetch(
+                """
+                SELECT
+                    p.id::text, p.seller_id::text, p.title, p.slug,
+                    p.description, p.status, p.deleted, p.created_at, p.updated_at,
+                    c.id::text AS category_id, c.name AS category_name
+                FROM products p
+                JOIN categories c ON c.id = p.category_id
+                ORDER BY p.created_at DESC, p.id
+                """,
+            )
+            image_rows = await connection.fetch(
+                """
+                SELECT id::text, product_id::text, url, ordering
+                FROM product_images
+                ORDER BY ordering ASC, id ASC
+                """,
+            )
+        images_by_product: dict[str, list[ProductImage]] = {}
+        for row in image_rows:
+            images_by_product.setdefault(str(row["product_id"]), []).append(
+                ProductImage(id=str(row["id"]), url=row["url"], ordering=int(row["ordering"]))
+            )
+        return tuple(
+            Product(
+                id=str(row["id"]),
+                seller_id=str(row["seller_id"]),
+                category=Category(id=str(row["category_id"]), name=row["category_name"]),
+                title=row["title"],
+                slug=row["slug"],
+                description=row["description"],
+                status=ProductStatus(row["status"]),
+                deleted=bool(row["deleted"]),
+                images=tuple(images_by_product.get(str(row["id"]), ())),
+                characteristics=(),
+                skus=(),
+                created_at=_parse_datetime(row["created_at"]),
+                updated_at=_parse_datetime(row["updated_at"]),
+            )
+            for row in product_rows
         )
 
     async def update_product(self, product: Product) -> Product:
