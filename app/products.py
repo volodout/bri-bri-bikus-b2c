@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 try:
     from enum import StrEnum
@@ -81,6 +81,8 @@ class ProductRepository(Protocol):
 
     async def get_product(self, product_id: str) -> Product | None: ...
 
+    async def update_product_status(self, product_id: str, status: ProductStatus) -> None: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -129,6 +131,11 @@ class InMemoryProductRepository:
 
     async def get_product(self, product_id: str) -> Product | None:
         return self._products.get(product_id)
+
+    async def update_product_status(self, product_id: str, status: ProductStatus) -> None:
+        product = self._products.get(product_id)
+        if product is not None:
+            self._products[product_id] = replace(product, status=status, updated_at=_utcnow())
 
     async def aclose(self) -> None:
         return None
@@ -237,6 +244,15 @@ class PostgresProductRepository:
                 UUID(product_id),
             )
         return _product_from_rows(product_row, image_rows, characteristic_rows)
+
+    async def update_product_status(self, product_id: str, status: ProductStatus) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE products SET status = $2, updated_at = now() WHERE id = $1",
+                UUID(product_id),
+                status.value,
+            )
 
     async def aclose(self) -> None:
         if self._pool is not None:
