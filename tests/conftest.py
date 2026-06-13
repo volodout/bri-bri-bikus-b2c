@@ -20,6 +20,7 @@ from app.products import (
 )
 from app.inventory import InMemoryReserveStore, RecordingB2CGateway
 from app.moderation import RecordingModerationGateway
+from app.moderation_inbound import InMemoryProcessedEventStore, RecordingB2CCatalogGateway
 from app.skus import InMemorySkuRepository, Sku
 
 SELLER_ID = "123e4567-e89b-12d3-a456-426614174000"
@@ -80,12 +81,24 @@ def b2c_gateway() -> RecordingB2CGateway:
 
 
 @pytest.fixture
+def processed_event_store() -> InMemoryProcessedEventStore:
+    return InMemoryProcessedEventStore()
+
+
+@pytest.fixture
+def b2c_catalog_gateway() -> RecordingB2CCatalogGateway:
+    return RecordingB2CCatalogGateway()
+
+
+@pytest.fixture
 def client(
     product_repository: InMemoryProductRepository,
     sku_repository: InMemorySkuRepository,
     moderation_gateway: RecordingModerationGateway,
     reserve_store: InMemoryReserveStore,
     b2c_gateway: RecordingB2CGateway,
+    processed_event_store: InMemoryProcessedEventStore,
+    b2c_catalog_gateway: RecordingB2CCatalogGateway,
 ):
     app = create_app(
         product_repository=product_repository,
@@ -93,6 +106,8 @@ def client(
         moderation_gateway=moderation_gateway,
         reserve_store=reserve_store,
         b2c_gateway=b2c_gateway,
+        processed_event_store=processed_event_store,
+        b2c_catalog_gateway=b2c_catalog_gateway,
     )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://b2b.test")

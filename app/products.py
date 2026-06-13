@@ -102,6 +102,14 @@ class ProductRepository(Protocol):
 
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None: ...
 
+    async def update_moderation_state(
+        self,
+        product_id: str,
+        status: ProductStatus,
+        blocking_reason: "BlockingReason | None",
+        field_reports: tuple["FieldReport", ...],
+    ) -> None: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -222,6 +230,23 @@ class InMemoryProductRepository:
         product = self._products.get(product_id)
         if product is not None:
             self._products[product_id] = replace(product, status=status, updated_at=_utcnow())
+
+    async def update_moderation_state(
+        self,
+        product_id: str,
+        status: ProductStatus,
+        blocking_reason: BlockingReason | None,
+        field_reports: tuple[FieldReport, ...],
+    ) -> None:
+        product = self._products.get(product_id)
+        if product is not None:
+            self._products[product_id] = replace(
+                product,
+                status=status,
+                blocking_reason=blocking_reason,
+                field_reports=tuple(field_reports),
+                updated_at=_utcnow(),
+            )
 
     async def aclose(self) -> None:
         return None
@@ -414,6 +439,53 @@ class PostgresProductRepository:
                 UUID(product_id),
                 status.value,
             )
+
+    async def update_moderation_state(
+        self,
+        product_id: str,
+        status: ProductStatus,
+        blocking_reason: BlockingReason | None,
+        field_reports: tuple[FieldReport, ...],
+    ) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    "UPDATE products SET status = $2, updated_at = now() WHERE id = $1",
+                    UUID(product_id),
+                    status.value,
+                )
+                await connection.execute(
+                    "DELETE FROM product_blocking_reasons WHERE product_id = $1",
+                    UUID(product_id),
+                )
+                if blocking_reason is not None:
+                    await connection.execute(
+                        """
+                        INSERT INTO product_blocking_reasons (product_id, reason_id, title, comment)
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        UUID(product_id),
+                        UUID(blocking_reason.id),
+                        blocking_reason.title,
+                        blocking_reason.comment,
+                    )
+                await connection.execute(
+                    "DELETE FROM product_field_reports WHERE product_id = $1",
+                    UUID(product_id),
+                )
+                for report in field_reports:
+                    await connection.execute(
+                        """
+                        INSERT INTO product_field_reports (id, product_id, field_name, sku_id, comment)
+                        VALUES ($1, $2, $3, $4, $5)
+                        """,
+                        uuid4(),
+                        UUID(product_id),
+                        report.field_name,
+                        UUID(report.sku_id) if report.sku_id else None,
+                        report.comment,
+                    )
 
     async def aclose(self) -> None:
         if self._pool is not None:

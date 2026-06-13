@@ -21,8 +21,15 @@ from app.inventory import (
     ReserveStore,
 )
 from app.moderation import HttpModerationGateway, ModerationGateway
+from app.moderation_inbound import (
+    B2CCatalogGateway,
+    HttpB2CCatalogGateway,
+    ModerationApplyService,
+    PostgresProcessedEventStore,
+    ProcessedEventStore,
+)
 from app.products import PostgresProductRepository, ProductRepository, ProductService
-from app.routes import products, reserve, skus
+from app.routes import moderation, products, reserve, skus
 from app.skus import PostgresSkuRepository, SkuRepository, SkuService
 from app.views import ProductViewService
 
@@ -33,6 +40,8 @@ def create_app(
     moderation_gateway: ModerationGateway | None = None,
     reserve_store: ReserveStore | None = None,
     b2c_gateway: B2CGateway | None = None,
+    processed_event_store: ProcessedEventStore | None = None,
+    b2c_catalog_gateway: B2CCatalogGateway | None = None,
 ) -> FastAPI:
     repository = product_repository or PostgresProductRepository(settings.database_url)
     sku_repo = sku_repository or PostgresSkuRepository(settings.database_url)
@@ -41,6 +50,10 @@ def create_app(
     )
     store = reserve_store or PostgresReserveStore(settings.database_url)
     b2c = b2c_gateway or HttpB2CGateway(settings.b2c_url, settings.b2b_to_b2c_key)
+    processed_store = processed_event_store or PostgresProcessedEventStore(settings.database_url)
+    b2c_catalog = b2c_catalog_gateway or HttpB2CCatalogGateway(
+        settings.b2c_url, settings.b2b_to_b2c_key
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -50,6 +63,7 @@ def create_app(
             await repository.aclose()
             await sku_repo.aclose()
             await store.aclose()
+            await processed_store.aclose()
 
     app = FastAPI(
         title="NeoMarket B2B Seller Cabinet",
@@ -64,6 +78,9 @@ def create_app(
     app.state.product_view_service = ProductViewService(repository, sku_repo)
     app.state.reserve_store = store
     app.state.inventory_service = InventoryService(sku_repo, store, b2c)
+    app.state.moderation_apply_service = ModerationApplyService(
+        repository, sku_repo, processed_store, b2c_catalog
+    )
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -72,6 +89,7 @@ def create_app(
     app.include_router(products.router)
     app.include_router(skus.router)
     app.include_router(reserve.router)
+    app.include_router(moderation.router)
     return app
 
 
