@@ -28,6 +28,14 @@ repository name says `b2c` by mistake; the service is B2B.
   replays the cached result without double-deducting; `unreserve` is deduped by
   `order_id`. When a SKU's `active_quantity` reaches 0 a `SKU_OUT_OF_STOCK` event is
   sent to B2C. Invariant `active_quantity + reserved_quantity = on_hand` is preserved.
+- US-B2B-09: apply a Moderation decision via `POST /api/v1/moderation/events`
+  (Moderation `X-Service-Key`; path/fields per the published `b2b.yaml`:
+  `event_type`, `occurred_at`, `blocking_reason_id`, `hard_block`; success `204`).
+  `MODERATED` clears blocking data; `BLOCKED` (soft) saves `blocking_reason`/`field_reports`;
+  `hard_block=true` sets terminal `HARD_BLOCKED`. Both block paths cascade a
+  `PRODUCT_BLOCKED` event to B2C. Idempotent — a re-delivered `idempotency_key` is a
+  no-op (the key is claimed before any side effect). `HARD_BLOCKED` is terminal:
+  subsequent seller `PUT` returns `403`.
 
 ## Run
 
@@ -97,6 +105,15 @@ DoD tests for contract 08 (`tests/test_reserve.py`):
 - `test_sku_out_of_stock_event_emitted`
 - `test_unreserve_restores_quantities`
 
+DoD tests for contract 09 (`tests/test_moderation_events.py`):
+
+- `test_moderated_event_clears_blocking_data`
+- `test_blocked_soft_saves_field_reports`
+- `test_blocked_hard_sets_terminal_status`
+- `test_hard_blocked_product_rejects_seller_edits`
+- `test_duplicate_event_same_idempotency_key_no_side_effects`
+- `test_missing_service_key_returns_401`
+
 ## Structure
 
 ```text
@@ -104,7 +121,8 @@ app/
   main.py              FastAPI app factory and error handlers
   auth.py              Seller JWT extraction
   errors.py            Canonical {code, message} errors
-  moderation.py        ProductEvent, ModerationGateway + Http/Recording impls
+  moderation.py        Outbound: ProductEvent, ModerationGateway + Http/Recording
+  moderation_inbound.py Inbound moderation decisions: apply service, idempotency store, B2C cascade
   products.py          Product domain, repositories, create/edit service
   skus.py              SKU domain, repositories (incl. atomic reserve/unreserve)
   inventory.py         Reserve/unreserve service, idempotency store, B2C gateway
@@ -112,6 +130,7 @@ app/
   routes/products.py   Product HTTP routes (GET, POST, PUT)
   routes/skus.py       SKU HTTP routes (POST, PUT)
   routes/reserve.py    Reserve/unreserve HTTP routes (B2C service-to-service)
+  routes/moderation.py Inbound moderation-events route (Moderation service-to-service)
 migrations/            Raw SQL migrations for asyncpg-based persistence
 scripts/               Operational helpers
 tests/                 Contract tests
