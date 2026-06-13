@@ -40,5 +40,14 @@ jobs:
             tests/test_skus.py::test_add_sku_to_hard_blocked_returns_403 \
             tests/test_skus.py::test_missing_image_returns_400
 
+      - name: Run contract 03 tests
+        run: |
+          pytest -v \
+            tests/test_edit.py::test_edit_moderated_product_returns_to_on_moderation \
+            tests/test_edit.py::test_edit_blocked_product_returns_to_on_moderation \
+            tests/test_edit.py::test_reserves_preserved_after_sku_edit \
+            tests/test_edit.py::test_edit_hard_blocked_returns_403 \
+            tests/test_edit.py::test_edit_others_product_returns_403
+
       - name: Run full test suite
         run: pytest -v

@@ -12,6 +12,11 @@ repository name says `b2c` by mistake; the service is B2B.
   an `EDITED` event (Founder ruling D-P8-01, 2026-05-27). The proposed OpenAPI for
   this endpoint lives in [`protocols/b2b/openapi.yaml`](protocols/b2b/openapi.yaml)
   (to be PR'd into `neomarket-protocols`, whose `/skus` body is still a stub).
+- US-B2B-03: editing via `PUT /api/v1/products/{id}` and `PUT /api/v1/skus/{id}`.
+  Ownership is enforced from the JWT (403 `NOT_OWNER` on someone else's resource);
+  editing a `MODERATED`/`BLOCKED` product — or any of its SKUs — returns it to
+  `ON_MODERATION` with an `EDITED` event. SKU reserves (`reserved_quantity`) are
+  preserved on edit; `HARD_BLOCKED` products cannot be edited (403).
 
 ## Run
 
@@ -54,6 +59,14 @@ DoD tests for contract 02 (`tests/test_skus.py`):
 - `test_add_sku_to_hard_blocked_returns_403`
 - `test_missing_image_returns_400`
 
+DoD tests for contract 03 (`tests/test_edit.py`):
+
+- `test_edit_moderated_product_returns_to_on_moderation`
+- `test_edit_blocked_product_returns_to_on_moderation`
+- `test_reserves_preserved_after_sku_edit`
+- `test_edit_hard_blocked_returns_403`
+- `test_edit_others_product_returns_403`
+
 ## Structure
 
 ```text
@@ -61,13 +74,14 @@ app/
   main.py              FastAPI app factory and error handlers
   auth.py              Seller JWT extraction
   errors.py            Canonical {code, message} errors
-  products.py          Product domain, validation, repositories, serializer
-  skus.py              SKU domain, repositories, transition service, Moderation gateway
-  routes/products.py   Product HTTP routes
-  routes/skus.py       SKU HTTP routes
+  moderation.py        ProductEvent, ModerationGateway + Http/Recording impls
+  products.py          Product domain, repositories, create/edit service
+  skus.py              SKU domain, repositories, create/edit service
+  routes/products.py   Product HTTP routes (POST, PUT)
+  routes/skus.py       SKU HTTP routes (POST, PUT)
 migrations/            Raw SQL migrations for asyncpg-based persistence
 scripts/               Operational helpers
 tests/                 Contract tests
-protocols/b2b/         Proposed OpenAPI for neomarket-protocols (POST /skus)
+protocols/b2b/         Proposed OpenAPI for neomarket-protocols (POST/PUT products + skus)
 docs/adr/              ADR text for pull requests
 ```

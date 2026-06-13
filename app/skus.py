@@ -1,24 +1,37 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
 from typing import Any, Mapping, Protocol
 from uuid import UUID, uuid4
 
-from app.errors import Forbidden, InvalidRequest, NotFound, ServiceUnavailable
+from app.errors import Forbidden, InvalidRequest, NotFound
+from app.moderation import ModerationGateway, ProductEvent, event_timestamp
 from app.products import (
     CharacteristicValue,
     ProductRepository,
     ProductStatus,
+    _is_uuid,
     _parse_characteristics,
     _required_string,
     _required_uuid,
+    ensure_owner,
+    remoderate_on_edit,
 )
 
 
 @dataclass(frozen=True)
 class SkuCreate:
     product_id: str
+    name: str
+    price: int
+    cost_price: int
+    discount: int
+    image: str
+    characteristics: tuple[CharacteristicValue, ...] = ()
+
+
+@dataclass(frozen=True)
+class SkuUpdate:
     name: str
     price: int
     cost_price: int
@@ -41,30 +54,12 @@ class Sku:
     reserved_quantity: int = 0
 
 
-@dataclass(frozen=True)
-class ProductEvent:
-    idempotency_key: str
-    product_id: str
-    seller_id: str
-    event: str
-    date: str
-
-    def as_payload(self) -> dict[str, Any]:
-        return {
-            "idempotency_key": self.idempotency_key,
-            "product_id": self.product_id,
-            "seller_id": self.seller_id,
-            "event": self.event,
-            "date": self.date,
-        }
-
-
-class ModerationGateway(Protocol):
-    async def publish_product_event(self, event: ProductEvent) -> None: ...
-
-
 class SkuRepository(Protocol):
     async def create_sku(self, sku: Sku) -> Sku: ...
+
+    async def get_sku(self, sku_id: str) -> Sku | None: ...
+
+    async def update_sku(self, sku: Sku) -> Sku: ...
 
     async def list_skus(self, product_id: str) -> tuple[Sku, ...]: ...
 
@@ -87,8 +82,8 @@ def _transition_for(status: ProductStatus) -> tuple[ProductStatus, str] | None:
 
 
 class SkuService:
-    # Creating a SKU spans two aggregates: it reads/writes the product (status)
-    # and writes the SKU itself, so the service coordinates two repositories.
+    # Creating/editing a SKU spans two aggregates: it reads/writes the product
+    # (status) and writes the SKU itself, so the service coordinates two repos.
     def __init__(
         self,
         product_repository: ProductRepository,
@@ -128,22 +123,59 @@ class SkuService:
                     product_id=product.id,
                     seller_id=product.seller_id,
                     event=event_type,
-                    date=_event_timestamp(),
+                    date=event_timestamp(),
                 )
             )
         return created
 
+    async def update_sku(self, seller_id: str, sku_id: str, payload: SkuUpdate) -> Sku:
+        if not _is_uuid(sku_id):
+            raise NotFound("SKU not found")
+        sku = await self._skus.get_sku(sku_id)
+        if sku is None:
+            raise NotFound("SKU not found")
+
+        product = await self._products.get_product(sku.product_id)
+        if product is None:
+            raise NotFound("Product not found")
+        ensure_owner(product, seller_id)
+        if product.status == ProductStatus.HARD_BLOCKED:
+            raise Forbidden("Cannot edit hard-blocked product")
+
+        # active_quantity / reserved_quantity are deliberately preserved: B2B does
+        # not touch reserves on edit (see canon "Политика при активных резервах").
+        updated = replace(
+            sku,
+            name=payload.name,
+            price=payload.price,
+            cost_price=payload.cost_price,
+            discount=payload.discount,
+            image=payload.image,
+            characteristics=payload.characteristics,
+        )
+        saved = await self._skus.update_sku(updated)
+        # Editing a SKU returns the parent product to moderation.
+        await remoderate_on_edit(product, self._products, self._moderation)
+        return saved
+
 
 class InMemorySkuRepository:
     def __init__(self) -> None:
-        self._skus: dict[str, list[Sku]] = {}
+        self._skus: dict[str, Sku] = {}
 
     async def create_sku(self, sku: Sku) -> Sku:
-        self._skus.setdefault(sku.product_id, []).append(sku)
+        self._skus[sku.id] = sku
+        return sku
+
+    async def get_sku(self, sku_id: str) -> Sku | None:
+        return self._skus.get(sku_id)
+
+    async def update_sku(self, sku: Sku) -> Sku:
+        self._skus[sku.id] = sku
         return sku
 
     async def list_skus(self, product_id: str) -> tuple[Sku, ...]:
-        return tuple(self._skus.get(product_id, ()))
+        return tuple(sku for sku in self._skus.values() if sku.product_id == product_id)
 
     async def aclose(self) -> None:
         return None
@@ -176,17 +208,73 @@ class PostgresSkuRepository:
                     sku.active_quantity,
                     sku.reserved_quantity,
                 )
-                for characteristic in sku.characteristics:
-                    await connection.execute(
-                        """
-                        INSERT INTO sku_characteristics (id, sku_id, name, value)
-                        VALUES ($1, $2, $3, $4)
-                        """,
-                        UUID(characteristic.id),
-                        UUID(sku.id),
-                        characteristic.name,
-                        characteristic.value,
-                    )
+                await self._insert_characteristics(connection, sku)
+        return sku
+
+    async def get_sku(self, sku_id: str) -> Sku | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow(
+                """
+                SELECT id::text, product_id::text, name, price, cost_price, discount,
+                       image, active_quantity, reserved_quantity
+                FROM skus
+                WHERE id = $1
+                """,
+                UUID(sku_id),
+            )
+            if row is None:
+                return None
+            characteristic_rows = await connection.fetch(
+                """
+                SELECT id::text, name, value
+                FROM sku_characteristics
+                WHERE sku_id = $1
+                ORDER BY id ASC
+                """,
+                UUID(sku_id),
+            )
+        return Sku(
+            id=str(row["id"]),
+            product_id=str(row["product_id"]),
+            name=row["name"],
+            price=int(row["price"]),
+            cost_price=int(row["cost_price"]),
+            discount=int(row["discount"]),
+            image=row["image"],
+            characteristics=tuple(
+                CharacteristicValue(id=str(r["id"]), name=r["name"], value=r["value"])
+                for r in characteristic_rows
+            ),
+            active_quantity=int(row["active_quantity"]),
+            reserved_quantity=int(row["reserved_quantity"]),
+        )
+
+    async def update_sku(self, sku: Sku) -> Sku:
+        # active_quantity / reserved_quantity are intentionally not in the UPDATE,
+        # so existing reserves survive the edit.
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE skus
+                    SET name = $2, price = $3, cost_price = $4, discount = $5,
+                        image = $6, updated_at = now()
+                    WHERE id = $1
+                    """,
+                    UUID(sku.id),
+                    sku.name,
+                    sku.price,
+                    sku.cost_price,
+                    sku.discount,
+                    sku.image,
+                )
+                await connection.execute(
+                    "DELETE FROM sku_characteristics WHERE sku_id = $1",
+                    UUID(sku.id),
+                )
+                await self._insert_characteristics(connection, sku)
         return sku
 
     async def list_skus(self, product_id: str) -> tuple[Sku, ...]:
@@ -239,6 +327,20 @@ class PostgresSkuRepository:
             await self._pool.close()
             self._pool = None
 
+    @staticmethod
+    async def _insert_characteristics(connection: Any, sku: Sku) -> None:
+        for characteristic in sku.characteristics:
+            await connection.execute(
+                """
+                INSERT INTO sku_characteristics (id, sku_id, name, value)
+                VALUES ($1, $2, $3, $4)
+                """,
+                UUID(characteristic.id),
+                UUID(sku.id),
+                characteristic.name,
+                characteristic.value,
+            )
+
     async def _get_pool(self):
         if self._pool is None:
             import asyncpg
@@ -247,71 +349,20 @@ class PostgresSkuRepository:
         return self._pool
 
 
-class RecordingModerationGateway:
-    """In-memory gateway used in tests; records every published event."""
-
-    def __init__(self) -> None:
-        self.events: list[ProductEvent] = []
-
-    async def publish_product_event(self, event: ProductEvent) -> None:
-        self.events.append(event)
-
-
-class HttpModerationGateway:
-    """Synchronous delivery: POST the event to Moderation in the request flow.
-
-    See docs/adr/0002-sku-moderation-event-delivery.md for the trade-off.
-    """
-
-    def __init__(
-        self,
-        base_url: str,
-        service_key: str,
-        *,
-        transport: Any = None,
-        timeout: float = 5.0,
-    ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._service_key = service_key
-        self._transport = transport
-        self._timeout = timeout
-
-    async def publish_product_event(self, event: ProductEvent) -> None:
-        import httpx
-
-        async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
-            try:
-                response = await client.post(
-                    f"{self._base_url}/api/v1/events/product",
-                    headers={"X-Service-Key": self._service_key},
-                    json=event.as_payload(),
-                )
-                response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise ServiceUnavailable("Moderation service is unavailable") from exc
-
-
 def parse_sku_create(payload: Any) -> SkuCreate:
     if not isinstance(payload, Mapping):
         raise InvalidRequest("Request body must be a JSON object")
 
     product_id = _required_uuid(payload, "product_id")
-    name = _required_string(payload, "name", max_length=255)
-    price = _required_positive_int(payload, "price")
-    cost_price = _required_positive_int(payload, "cost_price")
-    discount = _optional_non_negative_int(payload, "discount")
-    image = _required_string(payload, "image", max_length=2048)
-    characteristics = _parse_characteristics(payload.get("characteristics", []))
+    fields = _parse_sku_fields(payload)
+    return SkuCreate(product_id=product_id, **fields)
 
-    return SkuCreate(
-        product_id=product_id,
-        name=name,
-        price=price,
-        cost_price=cost_price,
-        discount=discount,
-        image=image,
-        characteristics=characteristics,
-    )
+
+def parse_sku_update(payload: Any) -> SkuUpdate:
+    if not isinstance(payload, Mapping):
+        raise InvalidRequest("Request body must be a JSON object")
+
+    return SkuUpdate(**_parse_sku_fields(payload))
 
 
 def to_sku_response(sku: Sku) -> dict[str, Any]:
@@ -331,6 +382,17 @@ def to_sku_response(sku: Sku) -> dict[str, Any]:
     }
 
 
+def _parse_sku_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "name": _required_string(payload, "name", max_length=255),
+        "price": _required_positive_int(payload, "price"),
+        "cost_price": _required_positive_int(payload, "cost_price"),
+        "discount": _optional_non_negative_int(payload, "discount"),
+        "image": _required_string(payload, "image", max_length=2048),
+        "characteristics": _parse_characteristics(payload.get("characteristics", [])),
+    }
+
+
 def _required_positive_int(payload: Mapping[str, Any], field_name: str) -> int:
     value = payload.get(field_name)
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
@@ -345,7 +407,3 @@ def _optional_non_negative_int(payload: Mapping[str, Any], field_name: str, defa
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise InvalidRequest(f"{field_name} must be a non-negative integer (kopecks)")
     return value
-
-
-def _event_timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")

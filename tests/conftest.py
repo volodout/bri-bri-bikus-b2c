@@ -15,7 +15,8 @@ from app.products import (
     ProductImage,
     ProductStatus,
 )
-from app.skus import InMemorySkuRepository, RecordingModerationGateway
+from app.moderation import RecordingModerationGateway
+from app.skus import InMemorySkuRepository, Sku
 
 SELLER_ID = "123e4567-e89b-12d3-a456-426614174000"
 OTHER_SELLER_ID = "223e4567-e89b-12d3-a456-426614174000"
@@ -104,6 +105,57 @@ def valid_sku_payload(**overrides):
         "image": "/s3/iphone15-black-256.jpg",
         "characteristics": [
             {"name": "Цвет", "value": "Чёрный"},
+            {"name": "Объём памяти", "value": "256 ГБ"},
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def seed_sku(
+    sku_repository: InMemorySkuRepository,
+    *,
+    product_id: str,
+    sku_id: str | None = None,
+    reserved_quantity: int = 0,
+    active_quantity: int = 0,
+) -> Sku:
+    sku = Sku(
+        id=sku_id or str(uuid4()),
+        product_id=product_id,
+        name="256GB Black",
+        price=12999000,
+        cost_price=9500000,
+        discount=0,
+        image="/s3/iphone15-black-256.jpg",
+        characteristics=(),
+        active_quantity=active_quantity,
+        reserved_quantity=reserved_quantity,
+    )
+    return await sku_repository.create_sku(sku)
+
+
+def valid_product_update_payload(**overrides):
+    payload = {
+        "title": "iPhone 15 Pro Max (обновлено)",
+        "description": "Обновленное описание флагмана Apple",
+        "category_id": CATEGORY_ID,
+        "images": [{"url": "/s3/iphone15-front-v2.jpg", "ordering": 0}],
+        "characteristics": [{"name": "Бренд", "value": "Apple"}],
+    }
+    payload.update(overrides)
+    return payload
+
+
+def valid_sku_update_payload(**overrides):
+    payload = {
+        "name": "256GB Black Titanium",
+        "price": 13499000,
+        "cost_price": 9800000,
+        "discount": 500000,
+        "image": "/s3/iphone15-black-titanium.jpg",
+        "characteristics": [
+            {"name": "Цвет", "value": "Чёрный титан"},
             {"name": "Объём памяти", "value": "256 ГБ"},
         ],
     }
