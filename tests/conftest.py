@@ -8,7 +8,14 @@ import jwt
 import pytest
 
 from app.main import create_app
-from app.products import Category, InMemoryProductRepository
+from app.products import (
+    Category,
+    InMemoryProductRepository,
+    Product,
+    ProductImage,
+    ProductStatus,
+)
+from app.skus import InMemorySkuRepository, RecordingModerationGateway
 
 SELLER_ID = "123e4567-e89b-12d3-a456-426614174000"
 OTHER_SELLER_ID = "223e4567-e89b-12d3-a456-426614174000"
@@ -40,7 +47,65 @@ def product_repository() -> InMemoryProductRepository:
 
 
 @pytest.fixture
-def client(product_repository: InMemoryProductRepository):
-    app = create_app(product_repository=product_repository)
+def sku_repository() -> InMemorySkuRepository:
+    return InMemorySkuRepository()
+
+
+@pytest.fixture
+def moderation_gateway() -> RecordingModerationGateway:
+    return RecordingModerationGateway()
+
+
+@pytest.fixture
+def client(
+    product_repository: InMemoryProductRepository,
+    sku_repository: InMemorySkuRepository,
+    moderation_gateway: RecordingModerationGateway,
+):
+    app = create_app(
+        product_repository=product_repository,
+        sku_repository=sku_repository,
+        moderation_gateway=moderation_gateway,
+    )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://b2b.test")
+
+
+async def seed_product(
+    repository: InMemoryProductRepository,
+    *,
+    status: ProductStatus = ProductStatus.CREATED,
+    seller_id: str = SELLER_ID,
+    product_id: str | None = None,
+) -> Product:
+    product = Product(
+        id=product_id or str(uuid4()),
+        seller_id=seller_id,
+        category=Category(id=CATEGORY_ID, name="iOS"),
+        title="iPhone 15 Pro Max",
+        slug="iphone-15-pro-max",
+        description="Flagship Apple smartphone with A17 Pro chip",
+        status=status,
+        deleted=False,
+        images=(ProductImage(id=str(uuid4()), url="/s3/iphone15-front.jpg", ordering=0),),
+        characteristics=(),
+        skus=(),
+    )
+    return await repository.create_product(product)
+
+
+def valid_sku_payload(**overrides):
+    payload = {
+        "product_id": str(uuid4()),
+        "name": "256GB Black",
+        "price": 12999000,
+        "cost_price": 9500000,
+        "discount": 0,
+        "image": "/s3/iphone15-black-256.jpg",
+        "characteristics": [
+            {"name": "Цвет", "value": "Чёрный"},
+            {"name": "Объём памяти", "value": "256 ГБ"},
+        ],
+    }
+    payload.update(overrides)
+    return payload

@@ -14,11 +14,26 @@ from app.errors import (
     validation_exception_handler,
 )
 from app.products import PostgresProductRepository, ProductRepository, ProductService
-from app.routes import products
+from app.routes import products, skus
+from app.skus import (
+    HttpModerationGateway,
+    ModerationGateway,
+    PostgresSkuRepository,
+    SkuRepository,
+    SkuService,
+)
 
 
-def create_app(product_repository: ProductRepository | None = None) -> FastAPI:
+def create_app(
+    product_repository: ProductRepository | None = None,
+    sku_repository: SkuRepository | None = None,
+    moderation_gateway: ModerationGateway | None = None,
+) -> FastAPI:
     repository = product_repository or PostgresProductRepository(settings.database_url)
+    sku_repo = sku_repository or PostgresSkuRepository(settings.database_url)
+    gateway = moderation_gateway or HttpModerationGateway(
+        settings.moderation_url, settings.b2b_to_mod_key
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -26,6 +41,7 @@ def create_app(product_repository: ProductRepository | None = None) -> FastAPI:
             yield
         finally:
             await repository.aclose()
+            await sku_repo.aclose()
 
     app = FastAPI(
         title="NeoMarket B2B Seller Cabinet",
@@ -34,13 +50,16 @@ def create_app(product_repository: ProductRepository | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.state.product_repository = repository
+    app.state.sku_repository = sku_repo
     app.state.product_service = ProductService(repository)
+    app.state.sku_service = SkuService(repository, sku_repo, gateway)
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_exception_handler)
 
     app.include_router(products.router)
+    app.include_router(skus.router)
     return app
 
 
