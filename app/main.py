@@ -13,9 +13,16 @@ from app.errors import (
     service_error_handler,
     validation_exception_handler,
 )
+from app.inventory import (
+    B2CGateway,
+    HttpB2CGateway,
+    InventoryService,
+    PostgresReserveStore,
+    ReserveStore,
+)
 from app.moderation import HttpModerationGateway, ModerationGateway
 from app.products import PostgresProductRepository, ProductRepository, ProductService
-from app.routes import products, skus
+from app.routes import products, reserve, skus
 from app.skus import PostgresSkuRepository, SkuRepository, SkuService
 from app.views import ProductViewService
 
@@ -24,12 +31,16 @@ def create_app(
     product_repository: ProductRepository | None = None,
     sku_repository: SkuRepository | None = None,
     moderation_gateway: ModerationGateway | None = None,
+    reserve_store: ReserveStore | None = None,
+    b2c_gateway: B2CGateway | None = None,
 ) -> FastAPI:
     repository = product_repository or PostgresProductRepository(settings.database_url)
     sku_repo = sku_repository or PostgresSkuRepository(settings.database_url)
     gateway = moderation_gateway or HttpModerationGateway(
         settings.moderation_url, settings.b2b_to_mod_key
     )
+    store = reserve_store or PostgresReserveStore(settings.database_url)
+    b2c = b2c_gateway or HttpB2CGateway(settings.b2c_url, settings.b2b_to_b2c_key)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -38,6 +49,7 @@ def create_app(
         finally:
             await repository.aclose()
             await sku_repo.aclose()
+            await store.aclose()
 
     app = FastAPI(
         title="NeoMarket B2B Seller Cabinet",
@@ -50,6 +62,8 @@ def create_app(
     app.state.product_service = ProductService(repository, gateway)
     app.state.sku_service = SkuService(repository, sku_repo, gateway)
     app.state.product_view_service = ProductViewService(repository, sku_repo)
+    app.state.reserve_store = store
+    app.state.inventory_service = InventoryService(sku_repo, store, b2c)
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -57,6 +71,7 @@ def create_app(
 
     app.include_router(products.router)
     app.include_router(skus.router)
+    app.include_router(reserve.router)
     return app
 
 

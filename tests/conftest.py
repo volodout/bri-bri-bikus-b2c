@@ -18,6 +18,7 @@ from app.products import (
     ProductImage,
     ProductStatus,
 )
+from app.inventory import InMemoryReserveStore, RecordingB2CGateway
 from app.moderation import RecordingModerationGateway
 from app.skus import InMemorySkuRepository, Sku
 
@@ -47,6 +48,10 @@ def service_headers() -> dict[str, str]:
     return {"X-Service-Key": settings.mod_to_b2b_key}
 
 
+def b2c_service_headers() -> dict[str, str]:
+    return {"X-Service-Key": settings.b2c_to_b2b_key}
+
+
 @pytest.fixture
 def product_repository() -> InMemoryProductRepository:
     return InMemoryProductRepository(
@@ -65,15 +70,29 @@ def moderation_gateway() -> RecordingModerationGateway:
 
 
 @pytest.fixture
+def reserve_store() -> InMemoryReserveStore:
+    return InMemoryReserveStore()
+
+
+@pytest.fixture
+def b2c_gateway() -> RecordingB2CGateway:
+    return RecordingB2CGateway()
+
+
+@pytest.fixture
 def client(
     product_repository: InMemoryProductRepository,
     sku_repository: InMemorySkuRepository,
     moderation_gateway: RecordingModerationGateway,
+    reserve_store: InMemoryReserveStore,
+    b2c_gateway: RecordingB2CGateway,
 ):
     app = create_app(
         product_repository=product_repository,
         sku_repository=sku_repository,
         moderation_gateway=moderation_gateway,
+        reserve_store=reserve_store,
+        b2c_gateway=b2c_gateway,
     )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://b2b.test")

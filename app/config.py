@@ -16,6 +16,9 @@ class Settings:
     moderation_url: str = os.getenv("MODERATION_URL", "http://moderation:8000")
     b2b_to_mod_key: str = os.getenv("B2B_TO_MOD_KEY", "dev-b2b-to-mod-key")
     mod_to_b2b_key: str = os.getenv("MOD_TO_B2B_KEY", "dev-mod-to-b2b-key")
+    b2c_to_b2b_key: str = os.getenv("B2C_TO_B2B_KEY", "dev-b2c-to-b2b-key")
+    b2c_url: str = os.getenv("B2C_URL", "http://b2c:8000")
+    b2b_to_b2c_key: str = os.getenv("B2B_TO_B2C_KEY", "dev-b2b-to-b2c-key")
 
 
 settings = Settings()

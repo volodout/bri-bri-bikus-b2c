@@ -57,5 +57,14 @@ jobs:
             tests/test_view.py::test_get_others_product_returns_404 \
             tests/test_view.py::test_get_nonexistent_returns_404
 
+      - name: Run contract 08 tests
+        run: |
+          pytest -v \
+            tests/test_reserve.py::test_reserve_all_skus_succeeds \
+            tests/test_reserve.py::test_partial_insufficient_stock_returns_409_all_rollback \
+            tests/test_reserve.py::test_idempotent_reserve_returns_200_without_double_deduction \
+            tests/test_reserve.py::test_sku_out_of_stock_event_emitted \
+            tests/test_reserve.py::test_unreserve_restores_quantities
+
       - name: Run full test suite
         run: pytest -v

@@ -42,6 +42,13 @@ def viewer_from_request(request: Request) -> str | None:
     return seller_id_from_jwt(request)
 
 
+def require_service_key(request: Request, expected_key: str) -> None:
+    """Trusted inter-service auth: the caller must present a matching X-Service-Key."""
+    key = request.headers.get("X-Service-Key")
+    if not key or key != expected_key:
+        raise Unauthorized("Invalid service key")
+
+
 def _claims_from_request(request: Request) -> dict[str, Any]:
     authorization = request.headers.get("Authorization")
     if not authorization:

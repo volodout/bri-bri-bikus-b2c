@@ -22,6 +22,12 @@ repository name says `b2c` by mistake; the service is B2B.
   `403`) or Moderation (`X-Service-Key`, sees any product). Returns the full
   seller payload including SKUs with `cost_price`/`reserved_quantity`, and for a
   `BLOCKED` product the `blocking_reason` and per-field `field_reports`.
+- US-B2B-08: stock reservation via `POST /api/v1/reserve` and `POST /api/v1/unreserve`
+  (B2C `X-Service-Key`). All-or-nothing: if any SKU is short, nothing is reserved and
+  the response is `409` with `failed_items`. Idempotent — a repeated `idempotency_key`
+  replays the cached result without double-deducting; `unreserve` is deduped by
+  `order_id`. When a SKU's `active_quantity` reaches 0 a `SKU_OUT_OF_STOCK` event is
+  sent to B2C. Invariant `active_quantity + reserved_quantity = on_hand` is preserved.
 
 ## Run
 
@@ -34,10 +40,13 @@ export DATABASE_URL=postgresql://neomarket:neomarket@localhost:5432/neomarket
 export JWT_ALGORITHM=HS256
 export JWT_SECRET=dev-jwt-secret-for-tests-32-bytes
 
-# Moderation event delivery + inbound service auth (defaults exist; override per env)
+# Cross-service URLs + keys (defaults exist; override per env)
 export MODERATION_URL=http://moderation:8000
 export B2B_TO_MOD_KEY=dev-b2b-to-mod-key
 export MOD_TO_B2B_KEY=dev-mod-to-b2b-key
+export B2C_TO_B2B_KEY=dev-b2c-to-b2b-key
+export B2C_URL=http://b2c:8000
+export B2B_TO_B2C_KEY=dev-b2b-to-b2c-key
 
 python -m scripts.apply_migrations
 uvicorn app.main:app --reload
@@ -80,6 +89,14 @@ DoD tests for contract 05 (`tests/test_view.py`):
 - `test_get_others_product_returns_404`
 - `test_get_nonexistent_returns_404`
 
+DoD tests for contract 08 (`tests/test_reserve.py`):
+
+- `test_reserve_all_skus_succeeds`
+- `test_partial_insufficient_stock_returns_409_all_rollback`
+- `test_idempotent_reserve_returns_200_without_double_deduction`
+- `test_sku_out_of_stock_event_emitted`
+- `test_unreserve_restores_quantities`
+
 ## Structure
 
 ```text
@@ -89,10 +106,12 @@ app/
   errors.py            Canonical {code, message} errors
   moderation.py        ProductEvent, ModerationGateway + Http/Recording impls
   products.py          Product domain, repositories, create/edit service
-  skus.py              SKU domain, repositories, create/edit service
+  skus.py              SKU domain, repositories (incl. atomic reserve/unreserve)
+  inventory.py         Reserve/unreserve service, idempotency store, B2C gateway
   views.py             Read-side product-card view (GET) + serializer
   routes/products.py   Product HTTP routes (GET, POST, PUT)
   routes/skus.py       SKU HTTP routes (POST, PUT)
+  routes/reserve.py    Reserve/unreserve HTTP routes (B2C service-to-service)
 migrations/            Raw SQL migrations for asyncpg-based persistence
 scripts/               Operational helpers
 tests/                 Contract tests
