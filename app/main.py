@@ -20,6 +20,7 @@ from app.inventory import (
     PostgresReserveStore,
     ReserveStore,
 )
+from app.catalog import CatalogService
 from app.moderation import HttpModerationGateway, ModerationGateway
 from app.moderation_inbound import (
     B2CCatalogGateway,
@@ -29,7 +30,7 @@ from app.moderation_inbound import (
     ProcessedEventStore,
 )
 from app.products import PostgresProductRepository, ProductRepository, ProductService
-from app.routes import moderation, products, reserve, skus
+from app.routes import catalog, moderation, products, reserve, skus
 from app.skus import PostgresSkuRepository, SkuRepository, SkuService
 from app.views import ProductViewService
 
@@ -81,6 +82,7 @@ def create_app(
     app.state.moderation_apply_service = ModerationApplyService(
         repository, sku_repo, processed_store, b2c_catalog
     )
+    app.state.catalog_service = CatalogService(repository, sku_repo)
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -90,6 +92,7 @@ def create_app(
     app.include_router(skus.router)
     app.include_router(reserve.router)
     app.include_router(moderation.router)
+    app.include_router(catalog.router)
     return app
 
 

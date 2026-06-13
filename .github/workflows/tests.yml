@@ -57,6 +57,14 @@ jobs:
             tests/test_view.py::test_get_others_product_returns_404 \
             tests/test_view.py::test_get_nonexistent_returns_404
 
+      - name: Run contract 07 tests
+        run: |
+          pytest -v \
+            tests/test_catalog.py::test_catalog_returns_only_visible_products \
+            tests/test_catalog.py::test_catalog_item_is_short_without_cost_fields \
+            tests/test_catalog.py::test_batch_returns_only_visible_by_ids \
+            tests/test_catalog.py::test_catalog_not_accessible_via_bearer_without_service_key
+
       - name: Run contract 08 tests
         run: |
           pytest -v \

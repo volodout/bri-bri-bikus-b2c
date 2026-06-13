@@ -22,6 +22,15 @@ repository name says `b2c` by mistake; the service is B2B.
   `403`) or Moderation (`X-Service-Key`, sees any product). Returns the full
   seller payload including SKUs with `cost_price`/`reserved_quantity`, and for a
   `BLOCKED` product the `blocking_reason` and per-field `field_reports`.
+- US-B2B-07: public B2C catalog via `GET /api/v1/public/products` and
+  `POST /api/v1/public/products/batch` (B2C `X-Service-Key`; paths/short-item shape
+  per the published `b2b.yaml`). Visible only if `MODERATED`, not deleted, and at
+  least one SKU has `active_quantity > 0`. List items are short
+  (`id, title, slug, status, category_id, min_price, cover_image, created_at`) — no
+  `skus`, no `cost_price`/`reserved_quantity`. Supports `limit`/`offset` (max 100),
+  `category_id`, `search`, `min_price`/`max_price`, `seller_id`, `sort`
+  (`price_asc`/`price_desc`/`created_desc`). Not reachable with a seller Bearer token
+  (X-Service-Key required), so the seller-list scoping cannot be bypassed.
 - US-B2B-08: stock reservation via `POST /api/v1/reserve` and `POST /api/v1/unreserve`
   (B2C `X-Service-Key`). All-or-nothing: if any SKU is short, nothing is reserved and
   the response is `409` with `failed_items`. Idempotent — a repeated `idempotency_key`
@@ -114,6 +123,13 @@ DoD tests for contract 09 (`tests/test_moderation_events.py`):
 - `test_duplicate_event_same_idempotency_key_no_side_effects`
 - `test_missing_service_key_returns_401`
 
+Key tests for contract 07 (`tests/test_catalog.py`):
+
+- `test_catalog_returns_only_visible_products`
+- `test_catalog_item_is_short_without_cost_fields`
+- `test_batch_returns_only_visible_by_ids`
+- `test_catalog_not_accessible_via_bearer_without_service_key`
+
 ## Structure
 
 ```text
@@ -126,11 +142,13 @@ app/
   products.py          Product domain, repositories, create/edit service
   skus.py              SKU domain, repositories (incl. atomic reserve/unreserve)
   inventory.py         Reserve/unreserve service, idempotency store, B2C gateway
+  catalog.py           Public B2C catalog service (visibility, filters, paging)
   views.py             Read-side product-card view (GET) + serializer
   routes/products.py   Product HTTP routes (GET, POST, PUT)
   routes/skus.py       SKU HTTP routes (POST, PUT)
   routes/reserve.py    Reserve/unreserve HTTP routes (B2C service-to-service)
   routes/moderation.py Inbound moderation-events route (Moderation service-to-service)
+  routes/catalog.py    Public B2C catalog routes (/public/products [+ /batch])
 migrations/            Raw SQL migrations for asyncpg-based persistence
 scripts/               Operational helpers
 tests/                 Contract tests
