@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Any, Mapping, Protocol
+from typing import Any, Mapping, Protocol, Sequence
 from uuid import UUID, uuid4
 
 from app.errors import Forbidden, InvalidRequest, NotFound
@@ -54,6 +54,32 @@ class Sku:
     reserved_quantity: int = 0
 
 
+@dataclass(frozen=True)
+class ReservedLine:
+    sku_id: str
+    reserved_quantity: int
+    remaining_stock: int
+
+
+@dataclass(frozen=True)
+class ShortLine:
+    sku_id: str
+    requested: int
+    available: int
+
+
+@dataclass(frozen=True)
+class ReserveOutcome:
+    ok: bool
+    reserved: tuple[ReservedLine, ...] = ()
+    shortages: tuple[ShortLine, ...] = ()
+    depleted: tuple[str, ...] = ()  # sku_ids whose active_quantity hit 0
+
+
+# An item to reserve/unreserve: (sku_id, quantity).
+ReserveLine = tuple[str, int]
+
+
 class SkuRepository(Protocol):
     async def create_sku(self, sku: Sku) -> Sku: ...
 
@@ -62,6 +88,10 @@ class SkuRepository(Protocol):
     async def update_sku(self, sku: Sku) -> Sku: ...
 
     async def list_skus(self, product_id: str) -> tuple[Sku, ...]: ...
+
+    async def reserve(self, items: Sequence[ReserveLine]) -> ReserveOutcome: ...
+
+    async def unreserve(self, items: Sequence[ReserveLine]) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -176,6 +206,42 @@ class InMemorySkuRepository:
 
     async def list_skus(self, product_id: str) -> tuple[Sku, ...]:
         return tuple(sku for sku in self._skus.values() if sku.product_id == product_id)
+
+    async def reserve(self, items: Sequence[ReserveLine]) -> ReserveOutcome:
+        # Atomic within the coroutine: all checks and updates run with no await
+        # in between, so no other reserve can interleave (single-threaded loop).
+        shortages = [
+            ShortLine(sku_id, quantity, _available(self._skus.get(sku_id)))
+            for sku_id, quantity in items
+            if _available(self._skus.get(sku_id)) < quantity
+        ]
+        if shortages:
+            return ReserveOutcome(ok=False, shortages=tuple(shortages))
+
+        reserved: list[ReservedLine] = []
+        depleted: list[str] = []
+        for sku_id, quantity in items:
+            sku = self._skus[sku_id]
+            updated = replace(
+                sku,
+                active_quantity=sku.active_quantity - quantity,
+                reserved_quantity=sku.reserved_quantity + quantity,
+            )
+            self._skus[sku_id] = updated
+            reserved.append(ReservedLine(sku_id, quantity, updated.active_quantity))
+            if updated.active_quantity == 0:
+                depleted.append(sku_id)
+        return ReserveOutcome(ok=True, reserved=tuple(reserved), depleted=tuple(depleted))
+
+    async def unreserve(self, items: Sequence[ReserveLine]) -> None:
+        for sku_id, quantity in items:
+            sku = self._skus.get(sku_id)
+            if sku is not None:
+                self._skus[sku_id] = replace(
+                    sku,
+                    active_quantity=sku.active_quantity + quantity,
+                    reserved_quantity=sku.reserved_quantity - quantity,
+                )
 
     async def aclose(self) -> None:
         return None
@@ -322,6 +388,69 @@ class PostgresSkuRepository:
             for row in sku_rows
         )
 
+    async def reserve(self, items: Sequence[ReserveLine]) -> ReserveOutcome:
+        wanted = {sku_id: quantity for sku_id, quantity in items}
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                rows = await connection.fetch(
+                    # ORDER BY id locks the rows in a deterministic order, so two
+                    # concurrent reserves over overlapping SKUs cannot deadlock.
+                    """
+                    SELECT id::text, active_quantity
+                    FROM skus
+                    WHERE id = ANY($1::uuid[])
+                    ORDER BY id
+                    FOR UPDATE
+                    """,
+                    [UUID(sku_id) for sku_id in wanted],
+                )
+                available = {str(row["id"]): int(row["active_quantity"]) for row in rows}
+                shortages = [
+                    ShortLine(sku_id, quantity, available.get(sku_id, 0))
+                    for sku_id, quantity in wanted.items()
+                    if available.get(sku_id, 0) < quantity
+                ]
+                if shortages:
+                    # Nothing was modified (SELECT only), so all-or-nothing holds.
+                    return ReserveOutcome(ok=False, shortages=tuple(shortages))
+                reserved: list[ReservedLine] = []
+                depleted: list[str] = []
+                for sku_id, quantity in wanted.items():
+                    new_active = available[sku_id] - quantity
+                    await connection.execute(
+                        """
+                        UPDATE skus SET
+                            active_quantity = active_quantity - $2,
+                            reserved_quantity = reserved_quantity + $2,
+                            updated_at = now()
+                        WHERE id = $1
+                        """,
+                        UUID(sku_id),
+                        quantity,
+                    )
+                    reserved.append(ReservedLine(sku_id, quantity, new_active))
+                    if new_active == 0:
+                        depleted.append(sku_id)
+        return ReserveOutcome(ok=True, reserved=tuple(reserved), depleted=tuple(depleted))
+
+    async def unreserve(self, items: Sequence[ReserveLine]) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                for sku_id, quantity in items:
+                    await connection.execute(
+                        """
+                        UPDATE skus SET
+                            active_quantity = active_quantity + $2,
+                            reserved_quantity = reserved_quantity - $2,
+                            updated_at = now()
+                        WHERE id = $1
+                        """,
+                        UUID(sku_id),
+                        quantity,
+                    )
+
     async def aclose(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -407,3 +536,7 @@ def _optional_non_negative_int(payload: Mapping[str, Any], field_name: str, defa
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise InvalidRequest(f"{field_name} must be a non-negative integer (kopecks)")
     return value
+
+
+def _available(sku: Sku | None) -> int:
+    return sku.active_quantity if sku is not None else 0
