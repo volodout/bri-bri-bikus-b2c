@@ -5,8 +5,8 @@ import re
 
 import httpx
 
+from app.moderation import HttpModerationGateway, ProductEvent
 from app.products import ProductStatus
-from app.skus import HttpModerationGateway, ProductEvent
 from tests.conftest import (
     SELLER_ID,
     auth_headers,

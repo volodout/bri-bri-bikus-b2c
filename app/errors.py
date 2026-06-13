@@ -29,6 +29,11 @@ class Forbidden(ServiceError):
         super().__init__(403, "FORBIDDEN", message)
 
 
+class NotOwner(ServiceError):
+    def __init__(self, message: str = "Resource does not belong to the authenticated seller"):
+        super().__init__(403, "NOT_OWNER", message)
+
+
 class NotFound(ServiceError):
     def __init__(self, message: str = "Not found"):
         super().__init__(404, "NOT_FOUND", message)

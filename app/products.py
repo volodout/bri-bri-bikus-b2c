@@ -13,7 +13,8 @@ except ImportError:
 from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID, uuid4
 
-from app.errors import InvalidRequest
+from app.errors import Forbidden, InvalidRequest, NotFound, NotOwner
+from app.moderation import ModerationGateway, ProductEvent, event_timestamp
 
 
 def _utcnow() -> datetime:
@@ -81,14 +82,50 @@ class ProductRepository(Protocol):
 
     async def get_product(self, product_id: str) -> Product | None: ...
 
+    async def update_product(self, product: Product) -> Product: ...
+
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None: ...
 
     async def aclose(self) -> None: ...
 
 
+def ensure_owner(product: Product, seller_id: str) -> None:
+    """IDOR guard: a seller may only edit their own product (or its SKUs).
+
+    Centralised so every edit endpoint enforces ownership the same way and
+    returns the canonical 403 NOT_OWNER (see docs/adr/0003-idor-protection.md).
+    """
+    if product.seller_id != seller_id:
+        raise NotOwner("Product does not belong to the authenticated seller")
+
+
+async def remoderate_on_edit(
+    product: Product,
+    repository: ProductRepository,
+    moderation: ModerationGateway,
+) -> None:
+    """A significant edit of a checked product sends it back to moderation.
+
+    MODERATED/BLOCKED -> ON_MODERATION + EDITED event. CREATED and ON_MODERATION
+    are left untouched (a draft / already-queued product needs no transition).
+    """
+    if product.status in (ProductStatus.MODERATED, ProductStatus.BLOCKED):
+        await repository.update_product_status(product.id, ProductStatus.ON_MODERATION)
+        await moderation.publish_product_event(
+            ProductEvent(
+                idempotency_key=str(uuid4()),
+                product_id=product.id,
+                seller_id=product.seller_id,
+                event="EDITED",
+                date=event_timestamp(),
+            )
+        )
+
+
 class ProductService:
-    def __init__(self, repository: ProductRepository) -> None:
+    def __init__(self, repository: ProductRepository, moderation: ModerationGateway) -> None:
         self._repository = repository
+        self._moderation = moderation
 
     async def create_product(self, seller_id: str, payload: ProductCreate) -> Product:
         category = await self._repository.get_category(payload.category_id)
@@ -113,6 +150,35 @@ class ProductService:
         )
         return await self._repository.create_product(product)
 
+    async def update_product(self, seller_id: str, product_id: str, payload: ProductCreate) -> Product:
+        if not _is_uuid(product_id):
+            raise NotFound("Product not found")
+        product = await self._repository.get_product(product_id)
+        if product is None:
+            raise NotFound("Product not found")
+        ensure_owner(product, seller_id)
+        if product.status == ProductStatus.HARD_BLOCKED:
+            raise Forbidden("Cannot edit hard-blocked product")
+
+        category = await self._repository.get_category(payload.category_id)
+        if category is None:
+            raise InvalidRequest("Category not found")
+
+        updated = replace(
+            product,
+            category=category,
+            title=payload.title,
+            slug=_slugify(payload.title),
+            description=payload.description,
+            images=payload.images,
+            characteristics=payload.characteristics,
+            updated_at=_utcnow(),
+        )
+        await self._repository.update_product(updated)
+        # The pre-edit status decides whether the card returns to moderation.
+        await remoderate_on_edit(product, self._repository, self._moderation)
+        return await self._repository.get_product(product_id)
+
 
 class InMemoryProductRepository:
     def __init__(self, categories: Iterable[Category] | None = None) -> None:
@@ -131,6 +197,10 @@ class InMemoryProductRepository:
 
     async def get_product(self, product_id: str) -> Product | None:
         return self._products.get(product_id)
+
+    async def update_product(self, product: Product) -> Product:
+        self._products[product.id] = product
+        return product
 
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None:
         product = self._products.get(product_id)
@@ -244,6 +314,58 @@ class PostgresProductRepository:
                 UUID(product_id),
             )
         return _product_from_rows(product_row, image_rows, characteristic_rows)
+
+    async def update_product(self, product: Product) -> Product:
+        # Status is left untouched here; the re-moderation transition is applied
+        # separately via update_product_status.
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute(
+                    """
+                    UPDATE products
+                    SET category_id = $2, title = $3, slug = $4, description = $5,
+                        updated_at = $6
+                    WHERE id = $1
+                    """,
+                    UUID(product.id),
+                    UUID(product.category.id),
+                    product.title,
+                    product.slug,
+                    product.description,
+                    product.updated_at,
+                )
+                await connection.execute(
+                    "DELETE FROM product_images WHERE product_id = $1",
+                    UUID(product.id),
+                )
+                for image in product.images:
+                    await connection.execute(
+                        """
+                        INSERT INTO product_images (id, product_id, url, ordering)
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        UUID(image.id),
+                        UUID(product.id),
+                        image.url,
+                        image.ordering,
+                    )
+                await connection.execute(
+                    "DELETE FROM product_characteristics WHERE product_id = $1",
+                    UUID(product.id),
+                )
+                for characteristic in product.characteristics:
+                    await connection.execute(
+                        """
+                        INSERT INTO product_characteristics (id, product_id, name, value)
+                        VALUES ($1, $2, $3, $4)
+                        """,
+                        UUID(characteristic.id),
+                        UUID(product.id),
+                        characteristic.name,
+                        characteristic.value,
+                    )
+        return product
 
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None:
         pool = await self._get_pool()
@@ -379,6 +501,14 @@ def _required_uuid(payload: Mapping[str, Any], field_name: str) -> str:
         return str(UUID(value))
     except ValueError:
         raise InvalidRequest(f"{field_name} must be a valid UUID")
+
+
+def _is_uuid(value: Any) -> bool:
+    try:
+        UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
 
 
 def _slugify(value: str) -> str:

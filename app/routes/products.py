@@ -27,3 +27,16 @@ async def create_product(request: Request) -> JSONResponse:
     payload = parse_product_create(raw_payload)
     product = await get_product_service(request).create_product(seller_id, payload)
     return JSONResponse(status_code=201, content=to_product_response(product))
+
+
+@router.put("/api/v1/products/{product_id}", status_code=200)
+async def update_product(product_id: str, request: Request) -> JSONResponse:
+    seller_id = seller_id_from_jwt(request)
+    try:
+        raw_payload = await request.json()
+    except JSONDecodeError:
+        raise InvalidRequest("Request body must be valid JSON")
+
+    payload = parse_product_create(raw_payload)
+    product = await get_product_service(request).update_product(seller_id, product_id, payload)
+    return JSONResponse(status_code=200, content=to_product_response(product))

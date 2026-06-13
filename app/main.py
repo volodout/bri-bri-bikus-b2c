@@ -13,15 +13,10 @@ from app.errors import (
     service_error_handler,
     validation_exception_handler,
 )
+from app.moderation import HttpModerationGateway, ModerationGateway
 from app.products import PostgresProductRepository, ProductRepository, ProductService
 from app.routes import products, skus
-from app.skus import (
-    HttpModerationGateway,
-    ModerationGateway,
-    PostgresSkuRepository,
-    SkuRepository,
-    SkuService,
-)
+from app.skus import PostgresSkuRepository, SkuRepository, SkuService
 
 
 def create_app(
@@ -51,7 +46,7 @@ def create_app(
     )
     app.state.product_repository = repository
     app.state.sku_repository = sku_repo
-    app.state.product_service = ProductService(repository)
+    app.state.product_service = ProductService(repository, gateway)
     app.state.sku_service = SkuService(repository, sku_repo, gateway)
 
     app.add_exception_handler(ServiceError, service_error_handler)
