@@ -12,7 +12,7 @@ repository name says `b2c` by mistake; the service is B2B.
   an `EDITED` event (Founder ruling D-P8-01, 2026-05-27). The proposed OpenAPI for
   this endpoint lives in [`protocols/b2b/openapi.yaml`](protocols/b2b/openapi.yaml)
   (to be PR'd into `neomarket-protocols`, whose `/skus` body is still a stub).
-- US-B2B-03: editing via `PUT /api/v1/products/{id}` and `PUT /api/v1/skus/{id}`.
+- US-B2B-03: editing via `PATCH /api/v1/products/{id}` and `PATCH /api/v1/skus/{id}`.
   Ownership is enforced from the JWT (403 `NOT_OWNER` on someone else's resource);
   editing a `MODERATED`/`BLOCKED` product — or any of its SKUs — returns it to
   `ON_MODERATION` with an `EDITED` event. SKU reserves (`reserved_quantity`) are
@@ -148,8 +148,8 @@ app/
   inventory.py         Reserve/unreserve service, idempotency store, B2C gateway
   catalog.py           Public B2C catalog service (visibility, filters, paging)
   views.py             Read-side product-card view (GET) + serializer
-  routes/products.py   Product HTTP routes (GET, POST, PUT)
-  routes/skus.py       SKU HTTP routes (POST, PUT)
+  routes/products.py   Product HTTP routes (GET, POST, PATCH)
+  routes/skus.py       SKU HTTP routes (POST, PATCH)
   routes/reserve.py    Reserve/unreserve HTTP routes (B2C service-to-service)
   routes/moderation.py Inbound moderation-events route (Moderation service-to-service)
   routes/catalog.py    Public B2C catalog routes (/public/products [+ /batch])

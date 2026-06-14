@@ -45,7 +45,7 @@ async def create_product(request: Request) -> JSONResponse:
     return JSONResponse(status_code=201, content=to_product_response(product))
 
 
-@router.put("/api/v1/products/{product_id}", status_code=200)
+@router.patch("/api/v1/products/{product_id}", status_code=200)
 async def update_product(product_id: str, request: Request) -> JSONResponse:
     seller_id = seller_id_from_jwt(request)
     try:

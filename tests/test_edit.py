@@ -23,7 +23,7 @@ async def test_edit_moderated_product_returns_to_on_moderation(
     product = await seed_product(product_repository, status=ProductStatus.MODERATED)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -44,7 +44,7 @@ async def test_edit_blocked_product_returns_to_on_moderation(
     product = await seed_product(product_repository, status=ProductStatus.BLOCKED)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -62,7 +62,7 @@ async def test_edit_product_emits_edited_event_with_fields(
     product = await seed_product(product_repository, status=ProductStatus.MODERATED)
 
     async with client as ac:
-        await ac.put(
+        await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -83,7 +83,7 @@ async def test_edit_created_product_stays_created(
     product = await seed_product(product_repository, status=ProductStatus.CREATED)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -100,7 +100,7 @@ async def test_edit_on_moderation_product_emits_no_new_event(
     product = await seed_product(product_repository, status=ProductStatus.ON_MODERATION)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -123,7 +123,7 @@ async def test_reserves_preserved_after_sku_edit(
     )
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{sku.id}",
             json=valid_sku_update_payload(),
             headers=auth_headers(),
@@ -151,7 +151,7 @@ async def test_edit_sku_returns_blocked_parent_to_on_moderation(
     sku = await seed_sku(sku_repository, product_id=product.id)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{sku.id}",
             json=valid_sku_update_payload(),
             headers=auth_headers(),
@@ -172,7 +172,7 @@ async def test_edit_hard_blocked_returns_403(
     product = await seed_product(product_repository, status=ProductStatus.HARD_BLOCKED)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -195,7 +195,7 @@ async def test_edit_others_product_returns_403(
     )
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(SELLER_ID),
@@ -219,7 +219,7 @@ async def test_edit_ignores_seller_id_in_body(client, product_repository):
     payload = valid_product_update_payload(seller_id=OTHER_SELLER_ID)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=payload,
             headers=auth_headers(SELLER_ID),
@@ -238,7 +238,7 @@ async def test_edit_others_sku_returns_403(
     sku = await seed_sku(sku_repository, product_id=product.id)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{sku.id}",
             json=valid_sku_update_payload(),
             headers=auth_headers(SELLER_ID),
@@ -259,7 +259,7 @@ async def test_edit_sku_on_hard_blocked_parent_returns_403(
     sku = await seed_sku(sku_repository, product_id=product.id)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{sku.id}",
             json=valid_sku_update_payload(),
             headers=auth_headers(),
@@ -275,7 +275,7 @@ async def test_edit_sku_on_hard_blocked_parent_returns_403(
 
 async def test_edit_product_not_found_returns_404(client):
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{uuid4()}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
@@ -287,7 +287,7 @@ async def test_edit_product_not_found_returns_404(client):
 
 async def test_edit_sku_not_found_returns_404(client):
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{uuid4()}",
             json=valid_sku_update_payload(),
             headers=auth_headers(),
@@ -303,7 +303,7 @@ async def test_edit_product_invalid_data_returns_400(client, product_repository)
     payload.pop("title")
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=payload,
             headers=auth_headers(),
@@ -318,7 +318,7 @@ async def test_edit_sku_invalid_price_returns_400(client, product_repository, sk
     sku = await seed_sku(sku_repository, product_id=product.id)
 
     async with client as ac:
-        response = await ac.put(
+        response = await ac.patch(
             f"/api/v1/skus/{sku.id}",
             json=valid_sku_update_payload(price=0),
             headers=auth_headers(),
