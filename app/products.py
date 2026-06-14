@@ -137,6 +137,7 @@ async def remoderate_on_edit(
     """
     if product.status in (ProductStatus.MODERATED, ProductStatus.BLOCKED):
         await repository.update_product_status(product.id, ProductStatus.ON_MODERATION)
+        after = replace(product, status=ProductStatus.ON_MODERATION)
         await moderation.publish_product_event(
             ProductEvent(
                 idempotency_key=str(uuid4()),
@@ -144,6 +145,9 @@ async def remoderate_on_edit(
                 seller_id=product.seller_id,
                 event="EDITED",
                 date=event_timestamp(),
+                json_after=to_product_response(after),
+                json_before=to_product_response(product),
+                category_id=product.category.id,
             )
         )
 
