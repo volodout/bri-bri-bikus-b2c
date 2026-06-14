@@ -34,12 +34,24 @@ async def test_get_moderated_product_returns_full_payload(
     assert body["blocked"] is False
     assert body["blocking_reason"] is None
     assert body["field_reports"] == []
-    assert body["category"] == {"id": product.category.id, "name": "iOS"}
+    # ProductDetailResponse required fields.
+    assert body["seller_id"] == product.seller_id
+    assert body["category_id"] == product.category.id
+    assert body["slug"] == product.slug
+    assert body["deleted"] is False
+    assert body["created_at"] and body["updated_at"]
     assert len(body["skus"]) == 1
     sku = body["skus"][0]
+    # SKUResponse (seller view).
+    assert sku["product_id"] == product.id
     assert sku["cost_price"] == 9500000  # seller-mode field
     assert sku["reserved_quantity"] == 2  # seller-mode field
     assert sku["active_quantity"] == 10
+    assert sku["stock_quantity"] == 12  # active + reserved
+    assert sku["article"] is None
+    assert isinstance(sku["images"], list)
+    assert "image" not in sku  # replaced by images[]
+    assert sku["created_at"] and sku["updated_at"]
 
 
 async def test_get_blocked_product_returns_blocking_reason_and_field_reports(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 from app.errors import InvalidRequest, NotFound
 from app.products import (
@@ -10,6 +11,7 @@ from app.products import (
     ProductRepository,
     ProductStatus,
     _is_uuid,
+    _serialize_datetime,
 )
 from app.skus import Sku, SkuRepository
 
@@ -42,41 +44,61 @@ class ProductViewService:
 
 
 def to_product_view(product: Product, skus: tuple[Sku, ...]) -> dict[str, Any]:
+    # ProductDetailResponse (seller / Moderation view), per the published b2b.yaml.
     return {
         "id": product.id,
+        "seller_id": product.seller_id,
+        "category_id": product.category.id,
         "title": product.title,
+        "slug": product.slug,
         "description": product.description,
         "status": product.status.value,
         "deleted": product.deleted,
-        "blocked": product.status in {ProductStatus.BLOCKED, ProductStatus.HARD_BLOCKED},
-        "category": {"id": product.category.id, "name": product.category.name},
         "images": [
-            {"url": image.url, "ordering": image.ordering} for image in product.images
+            {"id": image.id, "url": image.url, "ordering": image.ordering}
+            for image in product.images
         ],
         "characteristics": [
-            {"name": item.name, "value": item.value} for item in product.characteristics
+            {"id": item.id, "name": item.name, "value": item.value}
+            for item in product.characteristics
         ],
         "skus": [_sku_view(sku) for sku in skus],
+        "created_at": _serialize_datetime(product.created_at),
+        "updated_at": _serialize_datetime(product.updated_at),
+        "blocked": product.status in {ProductStatus.BLOCKED, ProductStatus.HARD_BLOCKED},
         "blocking_reason": _blocking_reason_view(product.blocking_reason),
         "field_reports": [_field_report_view(report) for report in product.field_reports],
     }
 
 
 def _sku_view(sku: Sku) -> dict[str, Any]:
-    # Seller-cabinet view: cost_price and reserved_quantity are included here;
-    # they are stripped only from the B2C catalog (see US-B2B-07).
+    # SKUResponse (seller view): includes cost_price and reserved_quantity; those
+    # are stripped only from the B2C catalog (see US-B2B-07).
+    images: list[dict[str, Any]] = []
+    if sku.image:
+        # The SKU model holds a single image URL; SKUImageResponse requires an id,
+        # so derive a stable one from the SKU id.
+        images = [
+            {"id": str(uuid5(NAMESPACE_URL, f"{sku.id}:image")), "url": sku.image, "ordering": 0}
+        ]
     return {
         "id": sku.id,
+        "product_id": sku.product_id,
         "name": sku.name,
         "price": sku.price,
-        "cost_price": sku.cost_price,
         "discount": sku.discount,
-        "image": sku.image,
+        "cost_price": sku.cost_price,
+        "stock_quantity": sku.active_quantity + sku.reserved_quantity,
         "active_quantity": sku.active_quantity,
         "reserved_quantity": sku.reserved_quantity,
+        "article": None,
+        "images": images,
         "characteristics": [
-            {"name": item.name, "value": item.value} for item in sku.characteristics
+            {"id": item.id, "name": item.name, "value": item.value}
+            for item in sku.characteristics
         ],
+        "created_at": _serialize_datetime(sku.created_at),
+        "updated_at": _serialize_datetime(sku.updated_at),
     }
 
 
