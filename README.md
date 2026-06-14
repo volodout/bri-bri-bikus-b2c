@@ -83,7 +83,7 @@ DoD tests for contract 01:
 
 - `test_create_product_returns_201_with_created_status`
 - `test_seller_id_taken_from_jwt`
-- `test_missing_images_returns_400`
+- `test_missing_images_defaults_to_empty`
 - `test_missing_category_returns_400`
 - `test_invalid_category_id_returns_400`
 

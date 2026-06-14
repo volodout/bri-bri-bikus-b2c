@@ -27,7 +27,7 @@ jobs:
           pytest -v \
             tests/test_products.py::test_create_product_returns_201_with_created_status \
             tests/test_products.py::test_seller_id_taken_from_jwt \
-            tests/test_products.py::test_missing_images_returns_400 \
+            tests/test_products.py::test_missing_images_defaults_to_empty \
             tests/test_products.py::test_missing_category_returns_400 \
             tests/test_products.py::test_invalid_category_id_returns_400
 
