@@ -80,7 +80,7 @@ def create_app(
     app.state.reserve_store = store
     app.state.inventory_service = InventoryService(sku_repo, store, b2c)
     app.state.moderation_apply_service = ModerationApplyService(
-        repository, sku_repo, processed_store, b2c_catalog
+        repository, processed_store, b2c_catalog
     )
     app.state.catalog_service = CatalogService(repository, sku_repo)
 
