@@ -170,8 +170,49 @@ async def test_batch_returns_only_visible_by_ids(client, product_repository, sku
         )
 
     assert response.status_code == 200
+    body = response.json()
+    # Bare array (not wrapped in {"items": ...}) per b2b.yaml.
+    assert isinstance(body, list)
     # hidden (not MODERATED) and missing are skipped, not 404.
-    assert [item["id"] for item in response.json()["items"]] == [visible.id]
+    assert [item["id"] for item in body] == [visible.id]
+
+
+async def test_batch_item_is_full_public_product(client, product_repository, sku_repository):
+    product = await seed_visible(product_repository, sku_repository, price=899000)
+
+    async with client as ac:
+        response = await ac.post(
+            "/api/v1/public/products/batch",
+            json={"product_ids": [product.id]},
+            headers=b2c_service_headers(),
+        )
+
+    item = response.json()[0]
+    # Full ProductPublicResponse shape.
+    assert set(item) == {
+        "id",
+        "seller_id",
+        "category_id",
+        "title",
+        "slug",
+        "description",
+        "status",
+        "images",
+        "characteristics",
+        "skus",
+        "created_at",
+        "updated_at",
+    }
+    assert len(item["skus"]) == 1
+    sku = item["skus"][0]
+    # Public SKU: no cost_price / reserved_quantity; has stock_quantity / article.
+    assert "cost_price" not in sku
+    assert "reserved_quantity" not in sku
+    assert sku["price"] == 899000
+    assert sku["active_quantity"] == 5
+    assert sku["stock_quantity"] == 5
+    assert sku["article"] is None
+    assert isinstance(sku["images"], list)
 
 
 # --- auth -----------------------------------------------------------------

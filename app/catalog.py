@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Sequence
+from uuid import NAMESPACE_URL, uuid5
 
 from app.errors import InvalidRequest
 from app.products import (
@@ -76,7 +77,9 @@ class CatalogService:
             "offset": offset,
         }
 
-    async def batch(self, product_ids: Sequence[str]) -> dict[str, Any]:
+    async def batch(self, product_ids: Sequence[str]) -> list[dict[str, Any]]:
+        # Per the published b2b.yaml, batch returns a bare array of full
+        # ProductPublicResponse items (not the short list shape, not wrapped).
         items: list[dict[str, Any]] = []
         seen: set[str] = set()
         for product_id in product_ids:
@@ -89,8 +92,8 @@ class CatalogService:
             skus = await self._skus.list_skus(product_id)
             if not _is_visible(product, skus):
                 continue  # visibility applies: a hidden product is skipped, not 404
-            items.append(_short(product, _min_price(skus)))
-        return {"items": items}
+            items.append(to_public_product(product, skus))
+        return items
 
     async def _visible_rows(self) -> list[tuple[Product, int]]:
         rows: list[tuple[Product, int]] = []
@@ -141,4 +144,57 @@ def _short(product: Product, min_price: int) -> dict[str, Any]:
         "min_price": min_price,
         "cover_image": cover_image,
         "created_at": _serialize_datetime(product.created_at),
+    }
+
+
+def to_public_product(product: Product, skus: Sequence[Sku]) -> dict[str, Any]:
+    """Full витринная карточка (ProductPublicResponse): no cost_price / reserved_quantity."""
+    return {
+        "id": product.id,
+        "seller_id": product.seller_id,
+        "category_id": product.category.id,
+        "title": product.title,
+        "slug": product.slug,
+        "description": product.description,
+        "status": product.status.value,
+        "images": [
+            {"id": image.id, "url": image.url, "ordering": image.ordering}
+            for image in product.images
+        ],
+        "characteristics": [
+            {"id": item.id, "name": item.name, "value": item.value}
+            for item in product.characteristics
+        ],
+        "skus": [_public_sku(sku) for sku in skus],
+        "created_at": _serialize_datetime(product.created_at),
+        "updated_at": _serialize_datetime(product.updated_at),
+    }
+
+
+def _public_sku(sku: Sku) -> dict[str, Any]:
+    images: list[dict[str, Any]] = []
+    if sku.image:
+        # The SKU model holds a single image URL; SKUImageResponse requires an id,
+        # so derive a stable one from the SKU id.
+        images = [
+            {
+                "id": str(uuid5(NAMESPACE_URL, f"{sku.id}:image")),
+                "url": sku.image,
+                "ordering": 0,
+            }
+        ]
+    return {
+        "id": sku.id,
+        "product_id": sku.product_id,
+        "name": sku.name,
+        "price": sku.price,
+        "discount": sku.discount,
+        "stock_quantity": sku.active_quantity + sku.reserved_quantity,
+        "active_quantity": sku.active_quantity,
+        "article": None,
+        "images": images,
+        "characteristics": [
+            {"id": item.id, "name": item.name, "value": item.value}
+            for item in sku.characteristics
+        ],
     }
