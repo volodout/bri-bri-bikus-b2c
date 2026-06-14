@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
+import httpx
+
+from app.moderation_inbound import HttpB2CCatalogGateway, ProductBlockedEvent
 from app.products import BlockingReason, FieldReport, ProductStatus
 from tests.conftest import (
     auth_headers,
@@ -77,7 +81,7 @@ async def test_blocked_soft_saves_field_reports(client, product_repository, b2c_
     # cascade to B2C
     assert len(b2c_catalog_gateway.events) == 1
     event = b2c_catalog_gateway.events[0]
-    assert event.event == "PRODUCT_BLOCKED"
+    assert event.event_type == "PRODUCT_BLOCKED"
     assert event.product_id == product.id
 
 
@@ -101,7 +105,8 @@ async def test_blocked_hard_sets_terminal_status(client, product_repository, b2c
     updated = await product_repository.get_product(product.id)
     assert updated.status == ProductStatus.HARD_BLOCKED
     assert len(b2c_catalog_gateway.events) == 1
-    assert b2c_catalog_gateway.events[0].event == "PRODUCT_BLOCKED"
+    # Hard block maps to the distinct B2C event type.
+    assert b2c_catalog_gateway.events[0].event_type == "PRODUCT_HARD_BLOCKED"
 
 
 async def test_hard_blocked_product_rejects_seller_edits(client, product_repository):
@@ -188,6 +193,43 @@ async def test_blocked_without_blocking_reason_id_returns_400(client, product_re
 
     assert response.status_code == 400
     assert response.json()["code"] == "INVALID_REQUEST"
+
+
+async def test_b2c_cascade_conforms_to_b2bevent():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["service_key"] = request.headers.get("X-Service-Key")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"status": "accepted"})
+
+    gateway = HttpB2CCatalogGateway(
+        "http://b2c.test", "b2c-key", transport=httpx.MockTransport(handler)
+    )
+    await gateway.publish_product_blocked(
+        ProductBlockedEvent(
+            idempotency_key="11111111-1111-1111-1111-111111111111",
+            event_type="PRODUCT_BLOCKED",
+            occurred_at="2026-03-15T14:30:00.000Z",
+            product_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            reason="bad photos",
+        )
+    )
+
+    # Conforms to B2C's B2BEvent at POST /api/v1/b2b/events.
+    assert captured["url"] == "http://b2c.test/api/v1/b2b/events"
+    assert captured["service_key"] == "b2c-key"
+    body = captured["body"]
+    assert body["event_type"] == "PRODUCT_BLOCKED"
+    assert body["occurred_at"] == "2026-03-15T14:30:00.000Z"
+    assert body["idempotency_key"] == "11111111-1111-1111-1111-111111111111"
+    assert body["payload"] == {
+        "product_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "reason": "bad photos",
+    }
+    assert "event" not in body
+    assert "sku_ids" not in body
 
 
 async def test_invalid_event_type_returns_400(client, product_repository):

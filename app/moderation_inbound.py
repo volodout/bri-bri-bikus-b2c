@@ -13,7 +13,6 @@ from app.products import (
     ProductStatus,
     _required_uuid,
 )
-from app.skus import SkuRepository
 
 
 @dataclass(frozen=True)
@@ -31,18 +30,21 @@ class ModerationEvent:
 @dataclass(frozen=True)
 class ProductBlockedEvent:
     idempotency_key: str
-    event: str
+    event_type: str  # PRODUCT_BLOCKED | PRODUCT_HARD_BLOCKED
+    occurred_at: str
     product_id: str
-    sku_ids: tuple[str, ...]
-    date: str
+    reason: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
+        # B2C's B2BEvent: payload is EventProductRef {product_id, reason?}.
+        payload: dict[str, Any] = {"product_id": self.product_id}
+        if self.reason:
+            payload["reason"] = self.reason
         return {
+            "event_type": self.event_type,
             "idempotency_key": self.idempotency_key,
-            "event": self.event,
-            "product_id": self.product_id,
-            "sku_ids": list(self.sku_ids),
-            "date": self.date,
+            "occurred_at": self.occurred_at,
+            "payload": payload,
         }
 
 
@@ -60,12 +62,10 @@ class ModerationApplyService:
     def __init__(
         self,
         product_repository: ProductRepository,
-        sku_repository: SkuRepository,
         processed_store: ProcessedEventStore,
         b2c_gateway: B2CCatalogGateway,
     ) -> None:
         self._products = product_repository
-        self._skus = sku_repository
         self._processed = processed_store
         self._b2c = b2c_gateway
 
@@ -100,14 +100,13 @@ class ModerationApplyService:
         await self._products.update_moderation_state(
             product.id, new_status, blocking_reason, event.field_reports
         )
-        skus = await self._skus.list_skus(product.id)
         await self._b2c.publish_product_blocked(
             ProductBlockedEvent(
                 idempotency_key=str(uuid4()),
-                event="PRODUCT_BLOCKED",
+                event_type="PRODUCT_HARD_BLOCKED" if event.hard_block else "PRODUCT_BLOCKED",
+                occurred_at=event_timestamp(),
                 product_id=product.id,
-                sku_ids=tuple(sku.id for sku in skus),
-                date=event_timestamp(),
+                reason=event.moderator_comment,
             )
         )
 
@@ -137,7 +136,7 @@ class HttpB2CCatalogGateway:
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
             try:
                 response = await client.post(
-                    f"{self._base_url}/api/v1/events/product",
+                    f"{self._base_url}/api/v1/b2b/events",
                     headers={"X-Service-Key": self._service_key},
                     json=event.as_payload(),
                 )
