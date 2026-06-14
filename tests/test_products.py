@@ -45,6 +45,9 @@ async def test_create_product_returns_201_with_created_status(client):
     assert body["title"] == "iPhone 15 Pro Max"
     assert body["category"]["id"] == CATEGORY_ID
     assert body["images"][0]["url"] == "/s3/iphone15-front.jpg"
+    # ProductResponse required, nullable on a fresh product.
+    assert body["blocking_reason_id"] is None
+    assert body["moderator_comment"] is None
 
 
 async def test_seller_id_taken_from_jwt(client):
@@ -61,7 +64,9 @@ async def test_seller_id_taken_from_jwt(client):
     assert body["seller_id"] != OTHER_SELLER_ID
 
 
-async def test_missing_images_returns_400(client):
+async def test_missing_images_defaults_to_empty(client):
+    # images is optional per ProductCreate (default []): a product can be created
+    # without images and the response carries an empty list, not a 400.
     payload = valid_product_payload()
     payload.pop("images")
 
@@ -72,10 +77,8 @@ async def test_missing_images_returns_400(client):
             headers=auth_headers(),
         )
 
-    assert response.status_code == 400
-    body = response.json()
-    assert body["code"] == "INVALID_REQUEST"
-    assert "image" in body["message"].lower()
+    assert response.status_code == 201
+    assert response.json()["images"] == []
 
 
 async def test_missing_category_returns_400(client):

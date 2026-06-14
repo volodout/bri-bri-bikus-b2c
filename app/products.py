@@ -586,6 +586,8 @@ def to_product_response(product: Product) -> dict[str, Any]:
         "status": product.status.value,
         "deleted": product.deleted,
         "blocked": product.status in {ProductStatus.BLOCKED, ProductStatus.HARD_BLOCKED},
+        "blocking_reason_id": product.blocking_reason.id if product.blocking_reason else None,
+        "moderator_comment": product.blocking_reason.comment if product.blocking_reason else None,
         "category": {"id": product.category.id, "name": product.category.name},
         "images": [
             {"id": image.id, "url": image.url, "ordering": image.ordering}
@@ -602,8 +604,11 @@ def to_product_response(product: Product) -> dict[str, Any]:
 
 
 def _parse_images(value: Any) -> tuple[ProductImage, ...]:
-    if not isinstance(value, list) or not value:
-        raise InvalidRequest("At least one image is required")
+    # images is optional per ProductCreate (default []); only validate when present.
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise InvalidRequest("images must be an array")
 
     images: list[ProductImage] = []
     for index, raw in enumerate(value):
