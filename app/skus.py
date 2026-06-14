@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
 from uuid import UUID, uuid4
 
@@ -14,6 +15,7 @@ from app.products import (
     _parse_characteristics,
     _required_string,
     _required_uuid,
+    _utcnow,
     ensure_owner,
     remoderate_on_edit,
     to_product_response,
@@ -53,6 +55,8 @@ class Sku:
     characteristics: tuple[CharacteristicValue, ...] = ()
     active_quantity: int = 0
     reserved_quantity: int = 0
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
 
 @dataclass(frozen=True)
@@ -288,7 +292,7 @@ class PostgresSkuRepository:
             row = await connection.fetchrow(
                 """
                 SELECT id::text, product_id::text, name, price, cost_price, discount,
-                       image, active_quantity, reserved_quantity
+                       image, active_quantity, reserved_quantity, created_at, updated_at
                 FROM skus
                 WHERE id = $1
                 """,
@@ -319,6 +323,8 @@ class PostgresSkuRepository:
             ),
             active_quantity=int(row["active_quantity"]),
             reserved_quantity=int(row["reserved_quantity"]),
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
         )
 
     async def update_sku(self, sku: Sku) -> Sku:
@@ -354,7 +360,7 @@ class PostgresSkuRepository:
             sku_rows = await connection.fetch(
                 """
                 SELECT id::text, product_id::text, name, price, cost_price, discount,
-                       image, active_quantity, reserved_quantity
+                       image, active_quantity, reserved_quantity, created_at, updated_at
                 FROM skus
                 WHERE product_id = $1
                 ORDER BY created_at ASC, id ASC
@@ -389,6 +395,8 @@ class PostgresSkuRepository:
                 characteristics=tuple(characteristics_by_sku.get(str(row["id"]), ())),
                 active_quantity=int(row["active_quantity"]),
                 reserved_quantity=int(row["reserved_quantity"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
             )
             for row in sku_rows
         )
