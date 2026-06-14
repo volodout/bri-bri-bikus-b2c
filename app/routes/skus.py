@@ -29,7 +29,7 @@ async def create_sku(request: Request) -> JSONResponse:
     return JSONResponse(status_code=201, content=to_sku_response(sku))
 
 
-@router.put("/api/v1/skus/{sku_id}", status_code=200)
+@router.patch("/api/v1/skus/{sku_id}", status_code=200)
 async def update_sku(sku_id: str, request: Request) -> JSONResponse:
     seller_id = seller_id_from_jwt(request)
     try:

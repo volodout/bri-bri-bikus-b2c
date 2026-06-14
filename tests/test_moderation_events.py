@@ -121,7 +121,7 @@ async def test_hard_blocked_product_rejects_seller_edits(client, product_reposit
             headers=service_headers(),
         )
         assert applied.status_code == 204
-        edit = await ac.put(
+        edit = await ac.patch(
             f"/api/v1/products/{product.id}",
             json=valid_product_update_payload(),
             headers=auth_headers(),
