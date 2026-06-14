@@ -6,6 +6,7 @@ from typing import Any, Mapping, Protocol
 from uuid import UUID
 
 from app.errors import InvalidRequest, ServiceUnavailable
+from app.moderation import event_timestamp
 from app.products import _required_uuid
 from app.skus import SkuRepository
 
@@ -19,6 +20,7 @@ class ReserveItem:
 @dataclass(frozen=True)
 class ReserveRequest:
     idempotency_key: str
+    order_id: str
     items: tuple[ReserveItem, ...]
 
 
@@ -31,7 +33,8 @@ class UnreserveRequest:
 @dataclass
 class ReserveResponse:
     reserved: bool
-    items: list[dict[str, Any]] = field(default_factory=list)
+    order_id: str | None = None
+    reserved_at: str | None = None
     failed_items: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -75,7 +78,11 @@ class InventoryService:
         cached = await self._store.get_reserve(request.idempotency_key)
         if cached is not None:
             # Already processed successfully: replay the stored result, no re-deduction.
-            return ReserveResponse(reserved=True, items=cached["items"])
+            return ReserveResponse(
+                reserved=True,
+                order_id=cached["order_id"],
+                reserved_at=cached["reserved_at"],
+            )
 
         outcome = await self._skus.reserve([(item.sku_id, item.quantity) for item in request.items])
         if not outcome.ok:
@@ -91,24 +98,21 @@ class InventoryService:
             # 409 is not cached: a retry should re-check stock, which may have changed.
             return ReserveResponse(reserved=False, failed_items=failed)
 
-        items = [
-            {
-                "sku_id": line.sku_id,
-                "reserved_quantity": line.reserved_quantity,
-                "remaining_stock": line.remaining_stock,
-            }
-            for line in outcome.reserved
-        ]
-        await self._store.save_reserve(request.idempotency_key, {"reserved": True, "items": items})
+        reserved_at = event_timestamp()
+        await self._store.save_reserve(
+            request.idempotency_key,
+            {"order_id": request.order_id, "reserved_at": reserved_at},
+        )
         for sku_id in outcome.depleted:
             await self._b2c.publish_stock_event(StockEvent(event="SKU_OUT_OF_STOCK", sku_id=sku_id))
-        return ReserveResponse(reserved=True, items=items)
+        return ReserveResponse(reserved=True, order_id=request.order_id, reserved_at=reserved_at)
 
-    async def unreserve(self, request: UnreserveRequest) -> None:
-        if await self._store.was_unreserved(request.order_id):
-            return  # idempotent on order_id: a retried cancellation does not double-restore
-        await self._skus.unreserve([(item.sku_id, item.quantity) for item in request.items])
-        await self._store.mark_unreserved(request.order_id)
+    async def unreserve(self, request: UnreserveRequest) -> str:
+        # Idempotent on order_id: a retried cancellation does not double-restore.
+        if not await self._store.was_unreserved(request.order_id):
+            await self._skus.unreserve([(item.sku_id, item.quantity) for item in request.items])
+            await self._store.mark_unreserved(request.order_id)
+        return event_timestamp()
 
 
 class RecordingB2CGateway:
@@ -232,6 +236,7 @@ def parse_reserve_request(payload: Any) -> ReserveRequest:
         raise InvalidRequest("Request body must be a JSON object")
     return ReserveRequest(
         idempotency_key=_required_uuid(payload, "idempotency_key"),
+        order_id=_required_uuid(payload, "order_id"),
         items=_parse_items(payload.get("items")),
     )
 
@@ -247,7 +252,13 @@ def parse_unreserve_request(payload: Any) -> UnreserveRequest:
 
 def to_reserve_response(response: ReserveResponse) -> dict[str, Any]:
     if response.reserved:
-        return {"reserved": True, "items": response.items}
+        # ReserveResponse per b2b.yaml.
+        return {
+            "order_id": response.order_id,
+            "status": "RESERVED",
+            "reserved_at": response.reserved_at,
+        }
+    # 409 body (insufficient/out-of-stock); the per-SKU detail is kept in failed_items.
     return {"reserved": False, "failed_items": response.failed_items}
 
 

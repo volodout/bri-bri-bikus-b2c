@@ -29,7 +29,7 @@ async def _json_body(request: Request):
         raise InvalidRequest("Request body must be valid JSON")
 
 
-@router.post("/api/v1/reserve")
+@router.post("/api/v1/inventory/reserve")
 async def reserve(request: Request) -> JSONResponse:
     require_service_key(request, settings.b2c_to_b2b_key)
     payload = parse_reserve_request(await _json_body(request))
@@ -38,9 +38,12 @@ async def reserve(request: Request) -> JSONResponse:
     return JSONResponse(status_code=status_code, content=to_reserve_response(result))
 
 
-@router.post("/api/v1/unreserve", status_code=200)
+@router.post("/api/v1/inventory/unreserve", status_code=200)
 async def unreserve(request: Request) -> JSONResponse:
     require_service_key(request, settings.b2c_to_b2b_key)
     payload = parse_unreserve_request(await _json_body(request))
-    await get_inventory_service(request).unreserve(payload)
-    return JSONResponse(status_code=200, content={"ok": True})
+    processed_at = await get_inventory_service(request).unreserve(payload)
+    return JSONResponse(
+        status_code=200,
+        content={"order_id": payload.order_id, "status": "UNRESERVED", "processed_at": processed_at},
+    )

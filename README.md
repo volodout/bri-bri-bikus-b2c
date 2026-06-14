@@ -31,12 +31,16 @@ repository name says `b2c` by mistake; the service is B2B.
   `category_id`, `search`, `min_price`/`max_price`, `seller_id`, `sort`
   (`price_asc`/`price_desc`/`created_desc`). Not reachable with a seller Bearer token
   (X-Service-Key required), so the seller-list scoping cannot be bypassed.
-- US-B2B-08: stock reservation via `POST /api/v1/reserve` and `POST /api/v1/unreserve`
-  (B2C `X-Service-Key`). All-or-nothing: if any SKU is short, nothing is reserved and
-  the response is `409` with `failed_items`. Idempotent — a repeated `idempotency_key`
-  replays the cached result without double-deducting; `unreserve` is deduped by
-  `order_id`. When a SKU's `active_quantity` reaches 0 a `SKU_OUT_OF_STOCK` event is
-  sent to B2C. Invariant `active_quantity + reserved_quantity = on_hand` is preserved.
+- US-B2B-08: stock reservation via `POST /api/v1/inventory/reserve` and
+  `POST /api/v1/inventory/unreserve` (B2C `X-Service-Key`; request carries
+  `idempotency_key`, `order_id`, `items`). Success returns `ReserveResponse`
+  (`{order_id, status: "RESERVED", reserved_at}`); unreserve returns
+  `{order_id, status: "UNRESERVED", processed_at}`. All-or-nothing: if any SKU is
+  short, nothing is reserved and the response is `409` with `failed_items`.
+  Idempotent — a repeated `idempotency_key` replays the cached result without
+  double-deducting; `unreserve` is deduped by `order_id`. When a SKU's
+  `active_quantity` reaches 0 a `SKU_OUT_OF_STOCK` event is sent to B2C. Invariant
+  `active_quantity + reserved_quantity = on_hand` is preserved.
 - US-B2B-09: apply a Moderation decision via `POST /api/v1/moderation/events`
   (Moderation `X-Service-Key`; path/fields per the published `b2b.yaml`:
   `event_type`, `occurred_at`, `blocking_reason_id`, `hard_block`; success `204`).

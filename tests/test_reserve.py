@@ -5,9 +5,10 @@ from uuid import uuid4
 from tests.conftest import b2c_service_headers, seed_sku
 
 
-def reserve_body(items, idempotency_key=None):
+def reserve_body(items, idempotency_key=None, order_id=None):
     return {
         "idempotency_key": idempotency_key or str(uuid4()),
+        "order_id": order_id or str(uuid4()),
         "items": [{"sku_id": sku_id, "quantity": qty} for sku_id, qty in items],
     }
 
@@ -29,17 +30,17 @@ async def test_reserve_all_skus_succeeds(client, sku_repository):
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/reserve",
+            "/api/v1/inventory/reserve",
             json=reserve_body([(sku1.id, 2), (sku2.id, 1)]),
             headers=b2c_service_headers(),
         )
 
     assert response.status_code == 200
     body = response.json()
-    assert body["reserved"] is True
-    by_id = {item["sku_id"]: item for item in body["items"]}
-    assert by_id[sku1.id]["reserved_quantity"] == 2
-    assert by_id[sku1.id]["remaining_stock"] == 8
+    # ReserveResponse per b2b.yaml.
+    assert body["status"] == "RESERVED"
+    assert body["reserved_at"]
+    assert "order_id" in body
 
     s1 = await sku_repository.get_sku(sku1.id)
     s2 = await sku_repository.get_sku(sku2.id)
@@ -54,8 +55,8 @@ async def test_idempotent_reserve_returns_200_without_double_deduction(client, s
     payload = reserve_body([(sku.id, 3)], idempotency_key=key)
 
     async with client as ac:
-        first = await ac.post("/api/v1/reserve", json=payload, headers=b2c_service_headers())
-        second = await ac.post("/api/v1/reserve", json=payload, headers=b2c_service_headers())
+        first = await ac.post("/api/v1/inventory/reserve", json=payload, headers=b2c_service_headers())
+        second = await ac.post("/api/v1/inventory/reserve", json=payload, headers=b2c_service_headers())
 
     assert first.status_code == 200
     assert second.status_code == 200
@@ -71,7 +72,7 @@ async def test_sku_out_of_stock_event_emitted(client, sku_repository, b2c_gatewa
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/reserve",
+            "/api/v1/inventory/reserve",
             json=reserve_body([(sku.id, 2)]),
             headers=b2c_service_headers(),
         )
@@ -89,7 +90,7 @@ async def test_no_event_when_stock_remains(client, sku_repository, b2c_gateway):
     sku = await seed_sku(sku_repository, product_id=pid, active_quantity=5)
 
     async with client as ac:
-        await ac.post("/api/v1/reserve", json=reserve_body([(sku.id, 2)]), headers=b2c_service_headers())
+        await ac.post("/api/v1/inventory/reserve", json=reserve_body([(sku.id, 2)]), headers=b2c_service_headers())
 
     assert b2c_gateway.events == []
 
@@ -100,13 +101,17 @@ async def test_unreserve_restores_quantities(client, sku_repository):
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/unreserve",
+            "/api/v1/inventory/unreserve",
             json=unreserve_body([(sku.id, 2)]),
             headers=b2c_service_headers(),
         )
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    body = response.json()
+    # InventoryOrderResponse per b2b.yaml.
+    assert body["status"] == "UNRESERVED"
+    assert body["processed_at"]
+    assert "order_id" in body
     sku_after = await sku_repository.get_sku(sku.id)
     assert (sku_after.active_quantity, sku_after.reserved_quantity) == (10, 0)
 
@@ -117,8 +122,8 @@ async def test_unreserve_idempotent_on_order_id(client, sku_repository):
     payload = unreserve_body([(sku.id, 2)], order_id=str(uuid4()))
 
     async with client as ac:
-        await ac.post("/api/v1/unreserve", json=payload, headers=b2c_service_headers())
-        await ac.post("/api/v1/unreserve", json=payload, headers=b2c_service_headers())
+        await ac.post("/api/v1/inventory/unreserve", json=payload, headers=b2c_service_headers())
+        await ac.post("/api/v1/inventory/unreserve", json=payload, headers=b2c_service_headers())
 
     # Restored once, not twice.
     sku_after = await sku_repository.get_sku(sku.id)
@@ -135,7 +140,7 @@ async def test_partial_insufficient_stock_returns_409_all_rollback(client, sku_r
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/reserve",
+            "/api/v1/inventory/reserve",
             json=reserve_body([(sku1.id, 2), (sku2.id, 5)]),
             headers=b2c_service_headers(),
         )
@@ -164,7 +169,7 @@ async def test_reserve_out_of_stock_reason(client, sku_repository):
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/reserve",
+            "/api/v1/inventory/reserve",
             json=reserve_body([(sku.id, 1)]),
             headers=b2c_service_headers(),
         )
@@ -181,9 +186,9 @@ async def test_reserve_requires_service_key(client, sku_repository):
     payload = reserve_body([(sku.id, 1)])
 
     async with client as ac:
-        missing = await ac.post("/api/v1/reserve", json=payload)
+        missing = await ac.post("/api/v1/inventory/reserve", json=payload)
         wrong = await ac.post(
-            "/api/v1/reserve", json=payload, headers={"X-Service-Key": "wrong-key"}
+            "/api/v1/inventory/reserve", json=payload, headers={"X-Service-Key": "wrong-key"}
         )
 
     assert missing.status_code == 401
@@ -198,7 +203,7 @@ async def test_reserve_invalid_quantity_returns_400(client, sku_repository):
 
     async with client as ac:
         response = await ac.post(
-            "/api/v1/reserve",
+            "/api/v1/inventory/reserve",
             json=reserve_body([(sku.id, 0)]),
             headers=b2c_service_headers(),
         )
