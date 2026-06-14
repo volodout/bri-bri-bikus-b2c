@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from app.errors import ServiceUnavailable
+
+# Internal event kind -> Moderation's IncomingB2BEvent.event_type wire value.
+_WIRE_EVENT_TYPE = {"CREATED": "PRODUCT_CREATED", "EDITED": "PRODUCT_EDITED"}
 
 
 @dataclass(frozen=True)
@@ -12,16 +15,29 @@ class ProductEvent:
     idempotency_key: str
     product_id: str
     seller_id: str
-    event: str
-    date: str
+    event: str  # internal kind: "CREATED" | "EDITED"
+    date: str  # UTC ISO-8601 with milliseconds + Z
+    json_after: dict[str, Any] = field(default_factory=dict)
+    json_before: dict[str, Any] | None = None
+    category_id: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
-        return {
-            "idempotency_key": self.idempotency_key,
+        # Shape required by Moderation's IncomingB2BEvent
+        # (POST /api/v1/b2b/events).
+        payload: dict[str, Any] = {
             "product_id": self.product_id,
             "seller_id": self.seller_id,
-            "event": self.event,
-            "date": self.date,
+        }
+        if self.category_id is not None:
+            payload["category_id"] = self.category_id
+        if self.event == "EDITED":
+            payload["json_before"] = self.json_before if self.json_before is not None else {}
+        payload["json_after"] = self.json_after
+        return {
+            "event_type": _WIRE_EVENT_TYPE[self.event],
+            "idempotency_key": self.idempotency_key,
+            "occurred_at": self.date,
+            "payload": payload,
         }
 
 
@@ -64,7 +80,7 @@ class HttpModerationGateway:
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
             try:
                 response = await client.post(
-                    f"{self._base_url}/api/v1/events/product",
+                    f"{self._base_url}/api/v1/b2b/events",
                     headers={"X-Service-Key": self._service_key},
                     json=event.as_payload(),
                 )

@@ -285,15 +285,43 @@ async def test_moderation_gateway_sends_service_key_and_idempotency_key():
         seller_id="c3d4e5f6-a7b8-9012-cdef-123456789012",
         event="CREATED",
         date="2026-03-15T14:30:00.000Z",
+        json_after={"id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890", "status": "ON_MODERATION"},
+        category_id="f47ac10b-58cc-4372-a567-0e02b2c3d479",
     )
 
     await gateway.publish_product_event(event)
 
-    assert captured["url"] == "http://moderation.test/api/v1/events/product"
+    # Conforms to Moderation's IncomingB2BEvent at POST /api/v1/b2b/events.
+    assert captured["url"] == "http://moderation.test/api/v1/b2b/events"
     assert captured["service_key"] == "secret-service-key"
     body = captured["body"]
+    assert body["event_type"] == "PRODUCT_CREATED"
     assert body["idempotency_key"] == "d1e2f3a4-b5c6-7890-abcd-ef1234567890"
-    assert body["product_id"] == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-    assert body["seller_id"] == "c3d4e5f6-a7b8-9012-cdef-123456789012"
-    assert body["event"] == "CREATED"
-    assert body["date"] == "2026-03-15T14:30:00.000Z"
+    assert body["occurred_at"] == "2026-03-15T14:30:00.000Z"
+    payload = body["payload"]
+    assert payload["product_id"] == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    assert payload["seller_id"] == "c3d4e5f6-a7b8-9012-cdef-123456789012"
+    assert payload["json_after"] == {
+        "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "status": "ON_MODERATION",
+    }
+    assert "event" not in body  # old wire field is gone
+
+
+def test_edited_event_payload_uses_product_edited_with_json_before():
+    event = ProductEvent(
+        idempotency_key="e2f3a4b5-c6d7-8901-bcde-f23456789012",
+        product_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        seller_id="c3d4e5f6-a7b8-9012-cdef-123456789012",
+        event="EDITED",
+        date="2026-03-15T16:45:12.000Z",
+        json_before={"status": "MODERATED"},
+        json_after={"status": "ON_MODERATION"},
+    )
+
+    body = event.as_payload()
+
+    assert body["event_type"] == "PRODUCT_EDITED"
+    assert body["occurred_at"] == "2026-03-15T16:45:12.000Z"
+    assert body["payload"]["json_before"] == {"status": "MODERATED"}
+    assert body["payload"]["json_after"] == {"status": "ON_MODERATION"}

@@ -16,6 +16,7 @@ from app.products import (
     _required_uuid,
     ensure_owner,
     remoderate_on_edit,
+    to_product_response,
 )
 
 
@@ -147,6 +148,7 @@ class SkuService:
         if transition is not None:
             new_status, event_type = transition
             await self._products.update_product_status(product.id, new_status)
+            after = replace(product, status=new_status)
             await self._moderation.publish_product_event(
                 ProductEvent(
                     idempotency_key=str(uuid4()),
@@ -154,6 +156,9 @@ class SkuService:
                     seller_id=product.seller_id,
                     event=event_type,
                     date=event_timestamp(),
+                    json_after=to_product_response(after),
+                    json_before=to_product_response(product) if event_type == "EDITED" else None,
+                    category_id=product.category.id,
                 )
             )
         return created
