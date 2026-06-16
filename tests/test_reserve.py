@@ -1,8 +1,45 @@
 from __future__ import annotations
 
+import json
 from uuid import uuid4
 
+import httpx
+
+from app.inventory import HttpB2CGateway, StockEvent
 from tests.conftest import b2c_service_headers, seed_sku
+
+
+async def test_stock_event_conforms_to_b2bevent():
+    captured: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured["url"] = str(request.url)
+        captured["service_key"] = request.headers.get("X-Service-Key")
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(202, json={"status": "accepted"})
+
+    gateway = HttpB2CGateway("http://b2c.test", "b2c-key", transport=httpx.MockTransport(handler))
+    await gateway.publish_stock_event(
+        StockEvent(
+            event="SKU_OUT_OF_STOCK",
+            sku_id="b2c3d4e5-f6a7-8901-bcde-f12345678901",
+            product_id="a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            available_quantity=0,
+        )
+    )
+
+    assert captured["url"] == "http://b2c.test/api/v1/b2b/events"
+    assert captured["service_key"] == "b2c-key"
+    body = captured["body"]
+    assert body["event_type"] == "SKU_OUT_OF_STOCK"
+    assert body["idempotency_key"]
+    assert body["occurred_at"]
+    assert body["payload"] == {
+        "sku_id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+        "product_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+        "available_quantity": 0,
+    }
+    assert "event" not in body
 
 
 def reserve_body(items, idempotency_key=None, order_id=None):
@@ -81,8 +118,11 @@ async def test_sku_out_of_stock_event_emitted(client, sku_repository, b2c_gatewa
     sku_after = await sku_repository.get_sku(sku.id)
     assert sku_after.active_quantity == 0
     assert len(b2c_gateway.events) == 1
-    assert b2c_gateway.events[0].event == "SKU_OUT_OF_STOCK"
-    assert b2c_gateway.events[0].sku_id == sku.id
+    event = b2c_gateway.events[0]
+    assert event.event == "SKU_OUT_OF_STOCK"
+    assert event.sku_id == sku.id
+    assert event.product_id == pid
+    assert event.available_quantity == 0
 
 
 async def test_no_event_when_stock_remains(client, sku_repository, b2c_gateway):
@@ -147,10 +187,12 @@ async def test_partial_insufficient_stock_returns_409_all_rollback(client, sku_r
 
     assert response.status_code == 409
     body = response.json()
-    assert body["reserved"] is False
-    assert len(body["failed_items"]) == 1
-    failed = body["failed_items"][0]
-    assert failed == {
+    # Error shape per b2b.yaml.
+    assert body["code"] == "INSUFFICIENT_STOCK"
+    assert body["message"]
+    failed_items = body["details"]["failed_items"]
+    assert len(failed_items) == 1
+    assert failed_items[0] == {
         "sku_id": sku2.id,
         "requested": 5,
         "available": 3,
@@ -175,7 +217,9 @@ async def test_reserve_out_of_stock_reason(client, sku_repository):
         )
 
     assert response.status_code == 409
-    failed = response.json()["failed_items"][0]
+    body = response.json()
+    assert body["code"] == "INSUFFICIENT_STOCK"
+    failed = body["details"]["failed_items"][0]
     assert failed["reason"] == "OUT_OF_STOCK"
     assert failed["available"] == 0
 
