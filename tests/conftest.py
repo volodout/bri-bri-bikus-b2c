@@ -149,7 +149,7 @@ def valid_sku_payload(**overrides):
         "price": 12999000,
         "cost_price": 9500000,
         "discount": 0,
-        "image": "/s3/iphone15-black-256.jpg",
+        "images": [{"url": "/s3/iphone15-black-256.jpg", "ordering": 0}],
         "characteristics": [
             {"name": "Цвет", "value": "Чёрный"},
             {"name": "Объём памяти", "value": "256 ГБ"},
@@ -201,7 +201,7 @@ def valid_sku_update_payload(**overrides):
         "price": 13499000,
         "cost_price": 9800000,
         "discount": 500000,
-        "image": "/s3/iphone15-black-titanium.jpg",
+        "images": [{"url": "/s3/iphone15-black-titanium.jpg", "ordering": 0}],
         "characteristics": [
             {"name": "Цвет", "value": "Чёрный титан"},
             {"name": "Объём памяти", "value": "256 ГБ"},

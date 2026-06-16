@@ -38,7 +38,7 @@ jobs:
             tests/test_skus.py::test_first_sku_emits_created_event_to_moderation \
             tests/test_skus.py::test_second_sku_no_state_change \
             tests/test_skus.py::test_add_sku_to_hard_blocked_returns_403 \
-            tests/test_skus.py::test_missing_image_returns_400
+            tests/test_skus.py::test_missing_images_defaults_to_empty
 
       - name: Run contract 03 tests
         run: |
