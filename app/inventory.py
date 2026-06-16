@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from app.errors import InvalidRequest, ServiceUnavailable
 from app.moderation import event_timestamp
@@ -40,11 +40,25 @@ class ReserveResponse:
 
 @dataclass(frozen=True)
 class StockEvent:
-    event: str
+    event: str  # internal kind, e.g. "SKU_OUT_OF_STOCK" -> B2BEvent.event_type
     sku_id: str
+    product_id: str
+    available_quantity: int
+    idempotency_key: str = field(default_factory=lambda: str(uuid4()))
+    occurred_at: str = field(default_factory=event_timestamp)
 
     def as_payload(self) -> dict[str, Any]:
-        return {"event": self.event, "sku_id": self.sku_id}
+        # B2C's B2BEvent: payload is EventSkuStock {sku_id, product_id, available_quantity}.
+        return {
+            "event_type": self.event,
+            "idempotency_key": self.idempotency_key,
+            "occurred_at": self.occurred_at,
+            "payload": {
+                "sku_id": self.sku_id,
+                "product_id": self.product_id,
+                "available_quantity": self.available_quantity,
+            },
+        }
 
 
 class B2CGateway(Protocol):
@@ -104,7 +118,15 @@ class InventoryService:
             {"order_id": request.order_id, "reserved_at": reserved_at},
         )
         for sku_id in outcome.depleted:
-            await self._b2c.publish_stock_event(StockEvent(event="SKU_OUT_OF_STOCK", sku_id=sku_id))
+            sku = await self._skus.get_sku(sku_id)
+            await self._b2c.publish_stock_event(
+                StockEvent(
+                    event="SKU_OUT_OF_STOCK",
+                    sku_id=sku_id,
+                    product_id=sku.product_id if sku else "",
+                    available_quantity=sku.active_quantity if sku else 0,
+                )
+            )
         return ReserveResponse(reserved=True, order_id=request.order_id, reserved_at=reserved_at)
 
     async def unreserve(self, request: UnreserveRequest) -> str:
@@ -140,7 +162,7 @@ class HttpB2CGateway:
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
             try:
                 response = await client.post(
-                    f"{self._base_url}/api/v1/events/stock",
+                    f"{self._base_url}/api/v1/b2b/events",
                     headers={"X-Service-Key": self._service_key},
                     json=event.as_payload(),
                 )
@@ -258,8 +280,12 @@ def to_reserve_response(response: ReserveResponse) -> dict[str, Any]:
             "status": "RESERVED",
             "reserved_at": response.reserved_at,
         }
-    # 409 body (insufficient/out-of-stock); the per-SKU detail is kept in failed_items.
-    return {"reserved": False, "failed_items": response.failed_items}
+    # 409 body as Error per b2b.yaml; per-SKU detail lives under details.failed_items.
+    return {
+        "code": "INSUFFICIENT_STOCK",
+        "message": "One or more SKUs could not be reserved",
+        "details": {"failed_items": response.failed_items},
+    }
 
 
 def _parse_items(value: Any) -> tuple[ReserveItem, ...]:
