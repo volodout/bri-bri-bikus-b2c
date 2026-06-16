@@ -604,7 +604,7 @@ def to_product_response(product: Product) -> dict[str, Any]:
 
 
 def _parse_images(value: Any) -> tuple[ProductImage, ...]:
-    # images is optional per ProductCreate (default []); only validate when present.
+    # images is optional per ProductCreate (default []) only validate when present.
     if value is None:
         return ()
     if not isinstance(value, list):
