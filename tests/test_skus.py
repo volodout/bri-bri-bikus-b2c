@@ -140,9 +140,12 @@ async def test_sku_response_shape(client, product_repository):
     assert body["price"] == 12999000
     assert body["cost_price"] == 9500000
     assert body["discount"] == 0
-    assert body["image"] == "/s3/iphone15-black-256.jpg"
+    assert body["images"][0]["url"] == "/s3/iphone15-black-256.jpg"
     assert body["active_quantity"] == 0
     assert body["reserved_quantity"] == 0
+    assert body["stock_quantity"] == 0
+    assert body["article"] is None
+    assert body["created_at"] and body["updated_at"]
     assert {"name": "Цвет", "value": "Чёрный"} in body["characteristics"]
     assert "id" in body
 
@@ -186,18 +189,18 @@ async def test_add_sku_to_hard_blocked_returns_403(
     assert await sku_repository.list_skus(product.id) == ()
 
 
-async def test_missing_image_returns_400(client, product_repository):
+async def test_missing_images_defaults_to_empty(client, product_repository):
+    # images is optional per SKUCreate (default []): a SKU can be created without
+    # images and the response carries an empty list, not a 400.
     product = await seed_product(product_repository, status=ProductStatus.CREATED)
     payload = valid_sku_payload(product_id=product.id)
-    payload.pop("image")
+    payload.pop("images")
 
     async with client as ac:
         response = await ac.post("/api/v1/skus", json=payload, headers=auth_headers())
 
-    assert response.status_code == 400
-    body = response.json()
-    assert body["code"] == "INVALID_REQUEST"
-    assert "image" in body["message"].lower()
+    assert response.status_code == 201
+    assert response.json()["images"] == []
 
 
 async def test_product_not_found_returns_404(client):

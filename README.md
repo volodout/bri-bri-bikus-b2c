@@ -93,7 +93,7 @@ DoD tests for contract 02 (`tests/test_skus.py`):
 - `test_first_sku_emits_created_event_to_moderation`
 - `test_second_sku_no_state_change`
 - `test_add_sku_to_hard_blocked_returns_403`
-- `test_missing_image_returns_400`
+- `test_missing_images_defaults_to_empty`
 
 DoD tests for contract 03 (`tests/test_edit.py`):
 
@@ -109,6 +109,13 @@ DoD tests for contract 05 (`tests/test_view.py`):
 - `test_get_blocked_product_returns_blocking_reason_and_field_reports`
 - `test_get_others_product_returns_404`
 - `test_get_nonexistent_returns_404`
+
+Key tests for contract 07 (`tests/test_catalog.py`):
+
+- `test_catalog_returns_only_visible_products`
+- `test_catalog_item_is_short_without_cost_fields`
+- `test_batch_returns_only_visible_by_ids`
+- `test_catalog_not_accessible_via_bearer_without_service_key`
 
 DoD tests for contract 08 (`tests/test_reserve.py`):
 
@@ -127,12 +134,6 @@ DoD tests for contract 09 (`tests/test_moderation_events.py`):
 - `test_duplicate_event_same_idempotency_key_no_side_effects`
 - `test_missing_service_key_returns_401`
 
-Key tests for contract 07 (`tests/test_catalog.py`):
-
-- `test_catalog_returns_only_visible_products`
-- `test_catalog_item_is_short_without_cost_fields`
-- `test_batch_returns_only_visible_by_ids`
-- `test_catalog_not_accessible_via_bearer_without_service_key`
 
 ## Structure
 

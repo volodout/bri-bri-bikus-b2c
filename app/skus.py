@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from app.errors import Forbidden, InvalidRequest, NotFound
 from app.moderation import ModerationGateway, ProductEvent, event_timestamp
@@ -15,6 +15,7 @@ from app.products import (
     _parse_characteristics,
     _required_string,
     _required_uuid,
+    _serialize_datetime,
     _utcnow,
     ensure_owner,
     remoderate_on_edit,
@@ -508,6 +509,12 @@ def parse_sku_update(payload: Any) -> SkuUpdate:
 
 
 def to_sku_response(sku: Sku) -> dict[str, Any]:
+    # SKUResponse per b2b.yaml.
+    images: list[dict[str, Any]] = []
+    if sku.image:
+        # The model holds a single image URL; SKUImageResponse requires an id,
+        # so derive a stable one from the SKU id.
+        images = [{"id": str(uuid5(NAMESPACE_URL, f"{sku.id}:image")), "url": sku.image, "ordering": 0}]
     return {
         "id": sku.id,
         "product_id": sku.product_id,
@@ -515,12 +522,16 @@ def to_sku_response(sku: Sku) -> dict[str, Any]:
         "price": sku.price,
         "cost_price": sku.cost_price,
         "discount": sku.discount,
-        "image": sku.image,
+        "stock_quantity": sku.active_quantity + sku.reserved_quantity,
         "active_quantity": sku.active_quantity,
         "reserved_quantity": sku.reserved_quantity,
+        "article": None,
+        "images": images,
         "characteristics": [
             {"name": item.name, "value": item.value} for item in sku.characteristics
         ],
+        "created_at": _serialize_datetime(sku.created_at),
+        "updated_at": _serialize_datetime(sku.updated_at),
     }
 
 
@@ -530,9 +541,23 @@ def _parse_sku_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
         "price": _required_positive_int(payload, "price"),
         "cost_price": _required_positive_int(payload, "cost_price"),
         "discount": _optional_non_negative_int(payload, "discount"),
-        "image": _required_string(payload, "image", max_length=2048),
+        "image": _primary_image_url(payload.get("images")),
         "characteristics": _parse_characteristics(payload.get("characteristics", [])),
     }
+
+
+def _primary_image_url(value: Any) -> str:
+    # images is optional per SKUCreate (default []); store the first URL.
+    if value is None:
+        return ""
+    if not isinstance(value, list):
+        raise InvalidRequest("images must be an array")
+    if not value:
+        return ""
+    first = value[0]
+    if not isinstance(first, Mapping):
+        raise InvalidRequest("images[0] must be an object")
+    return _required_string(first, "url", max_length=2048, display_name="images[0].url")
 
 
 def _required_positive_int(payload: Mapping[str, Any], field_name: str) -> int:
