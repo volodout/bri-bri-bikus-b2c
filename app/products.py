@@ -17,6 +17,13 @@ from app.errors import Forbidden, InvalidRequest, NotFound, NotOwner
 from app.moderation import ModerationGateway, ProductEvent, event_timestamp
 
 
+class _Missing:
+    pass
+
+
+MISSING = _Missing()
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -56,6 +63,15 @@ class ProductCreate:
     category_id: str
     images: tuple[ProductImage, ...]
     characteristics: tuple[CharacteristicValue, ...] = ()
+
+
+@dataclass(frozen=True)
+class ProductUpdate:
+    title: str | _Missing = MISSING
+    description: str | _Missing = MISSING
+    category_id: str | _Missing = MISSING
+    images: tuple[ProductImage, ...] | _Missing = MISSING
+    characteristics: tuple[CharacteristicValue, ...] | _Missing = MISSING
 
 
 @dataclass(frozen=True)
@@ -180,7 +196,7 @@ class ProductService:
         )
         return await self._repository.create_product(product)
 
-    async def update_product(self, seller_id: str, product_id: str, payload: ProductCreate) -> Product:
+    async def update_product(self, seller_id: str, product_id: str, payload: ProductUpdate) -> Product:
         if not _is_uuid(product_id):
             raise NotFound("Product not found")
         product = await self._repository.get_product(product_id)
@@ -190,18 +206,29 @@ class ProductService:
         if product.status == ProductStatus.HARD_BLOCKED:
             raise Forbidden("Cannot edit hard-blocked product")
 
-        category = await self._repository.get_category(payload.category_id)
-        if category is None:
-            raise InvalidRequest("Category not found")
+        if _is_missing_product_update(payload):
+            return product
+
+        category = product.category
+        if payload.category_id is not MISSING:
+            category = await self._repository.get_category(payload.category_id)
+            if category is None:
+                raise InvalidRequest("Category not found")
+
+        title = product.title if payload.title is MISSING else payload.title
 
         updated = replace(
             product,
             category=category,
-            title=payload.title,
-            slug=_slugify(payload.title),
-            description=payload.description,
-            images=payload.images,
-            characteristics=payload.characteristics,
+            title=title,
+            slug=product.slug if payload.title is MISSING else _slugify(title),
+            description=product.description if payload.description is MISSING else payload.description,
+            images=product.images if payload.images is MISSING else payload.images,
+            characteristics=(
+                product.characteristics
+                if payload.characteristics is MISSING
+                else payload.characteristics
+            ),
             updated_at=_utcnow(),
         )
         await self._repository.update_product(updated)
@@ -575,6 +602,19 @@ def parse_product_create(payload: Any) -> ProductCreate:
     )
 
 
+def parse_product_update(payload: Any) -> ProductUpdate:
+    if not isinstance(payload, Mapping):
+        raise InvalidRequest("Request body must be a JSON object")
+
+    return ProductUpdate(
+        title=_optional_string(payload, "title", max_length=255),
+        description=_optional_string(payload, "description", max_length=5000),
+        category_id=_optional_uuid(payload, "category_id"),
+        images=_optional_images(payload, "images"),
+        characteristics=_optional_characteristics(payload, "characteristics"),
+    )
+
+
 def to_product_response(product: Product) -> dict[str, Any]:
     return {
         "id": product.id,
@@ -622,6 +662,14 @@ def _parse_images(value: Any) -> tuple[ProductImage, ...]:
     return tuple(images)
 
 
+def _optional_images(
+    payload: Mapping[str, Any], field_name: str
+) -> tuple[ProductImage, ...] | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _parse_images(payload.get(field_name))
+
+
 def _parse_characteristics(value: Any) -> tuple[CharacteristicValue, ...]:
     if value is None:
         return ()
@@ -648,6 +696,14 @@ def _parse_characteristics(value: Any) -> tuple[CharacteristicValue, ...]:
     return tuple(result)
 
 
+def _optional_characteristics(
+    payload: Mapping[str, Any], field_name: str
+) -> tuple[CharacteristicValue, ...] | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _parse_characteristics(payload.get(field_name))
+
+
 def _required_string(
     payload: Mapping[str, Any],
     field_name: str,
@@ -665,6 +721,14 @@ def _required_string(
     return normalized
 
 
+def _optional_string(
+    payload: Mapping[str, Any], field_name: str, *, max_length: int
+) -> str | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _required_string(payload, field_name, max_length=max_length)
+
+
 def _required_uuid(payload: Mapping[str, Any], field_name: str) -> str:
     value = payload.get(field_name)
     if not isinstance(value, str) or not value.strip():
@@ -675,12 +739,31 @@ def _required_uuid(payload: Mapping[str, Any], field_name: str) -> str:
         raise InvalidRequest(f"{field_name} must be a valid UUID")
 
 
+def _optional_uuid(payload: Mapping[str, Any], field_name: str) -> str | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _required_uuid(payload, field_name)
+
+
 def _is_uuid(value: Any) -> bool:
     try:
         UUID(value)
     except (ValueError, AttributeError, TypeError):
         return False
     return True
+
+
+def _is_missing_product_update(payload: ProductUpdate) -> bool:
+    return all(
+        value is MISSING
+        for value in (
+            payload.title,
+            payload.description,
+            payload.category_id,
+            payload.images,
+            payload.characteristics,
+        )
+    )
 
 
 def _slugify(value: str) -> str:
