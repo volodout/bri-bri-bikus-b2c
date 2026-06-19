@@ -28,7 +28,7 @@ class SkuCreate:
     product_id: str
     name: str
     price: int
-    cost_price: int
+    cost_price: int | None
     discount: int
     image: str
     characteristics: tuple[CharacteristicValue, ...] = ()
@@ -50,7 +50,7 @@ class Sku:
     product_id: str
     name: str
     price: int
-    cost_price: int
+    cost_price: int | None
     discount: int
     image: str
     characteristics: tuple[CharacteristicValue, ...] = ()
@@ -315,7 +315,7 @@ class PostgresSkuRepository:
             product_id=str(row["product_id"]),
             name=row["name"],
             price=int(row["price"]),
-            cost_price=int(row["cost_price"]),
+            cost_price=_nullable_int(row["cost_price"]),
             discount=int(row["discount"]),
             image=row["image"],
             characteristics=tuple(
@@ -390,7 +390,7 @@ class PostgresSkuRepository:
                 product_id=str(row["product_id"]),
                 name=row["name"],
                 price=int(row["price"]),
-                cost_price=int(row["cost_price"]),
+                cost_price=_nullable_int(row["cost_price"]),
                 discount=int(row["discount"]),
                 image=row["image"],
                 characteristics=tuple(characteristics_by_sku.get(str(row["id"]), ())),
@@ -497,7 +497,7 @@ def parse_sku_create(payload: Any) -> SkuCreate:
         raise InvalidRequest("Request body must be a JSON object")
 
     product_id = _required_uuid(payload, "product_id")
-    fields = _parse_sku_fields(payload)
+    fields = _parse_sku_fields(payload, cost_price_required=False)
     return SkuCreate(product_id=product_id, **fields)
 
 
@@ -535,11 +535,13 @@ def to_sku_response(sku: Sku) -> dict[str, Any]:
     }
 
 
-def _parse_sku_fields(payload: Mapping[str, Any]) -> dict[str, Any]:
+def _parse_sku_fields(
+    payload: Mapping[str, Any], *, cost_price_required: bool = True
+) -> dict[str, Any]:
     return {
         "name": _required_string(payload, "name", max_length=255),
         "price": _required_positive_int(payload, "price"),
-        "cost_price": _required_positive_int(payload, "cost_price"),
+        "cost_price": _parse_cost_price(payload, required=cost_price_required),
         "discount": _optional_non_negative_int(payload, "discount"),
         "image": _primary_image_url(payload.get("images")),
         "characteristics": _parse_characteristics(payload.get("characteristics", [])),
@@ -565,6 +567,17 @@ def _required_positive_int(payload: Mapping[str, Any], field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise InvalidRequest(f"{field_name} must be a positive integer (kopecks)")
     return value
+
+
+def _parse_cost_price(payload: Mapping[str, Any], *, required: bool) -> int | None:
+    value = payload.get("cost_price")
+    if value is None and not required:
+        return None
+    return _required_positive_int(payload, "cost_price")
+
+
+def _nullable_int(value: Any) -> int | None:
+    return None if value is None else int(value)
 
 
 def _optional_non_negative_int(payload: Mapping[str, Any], field_name: str, default: int = 0) -> int:

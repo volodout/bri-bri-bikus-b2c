@@ -162,6 +162,18 @@ async def test_discount_defaults_to_zero(client, product_repository):
     assert response.json()["discount"] == 0
 
 
+async def test_missing_cost_price_returns_201_with_null(client, product_repository):
+    product = await seed_product(product_repository, status=ProductStatus.CREATED)
+    payload = valid_sku_payload(product_id=product.id)
+    payload.pop("cost_price")
+
+    async with client as ac:
+        response = await ac.post("/api/v1/skus", json=payload, headers=auth_headers())
+
+    assert response.status_code == 201
+    assert response.json()["cost_price"] is None
+
+
 # --- unhappy path ---------------------------------------------------------
 
 
@@ -238,7 +250,7 @@ async def test_cost_price_must_be_positive_returns_400(client, product_repositor
     async with client as ac:
         response = await ac.post(
             "/api/v1/skus",
-            json=valid_sku_payload(product_id=product.id, cost_price=-1),
+            json=valid_sku_payload(product_id=product.id, cost_price=0),
             headers=auth_headers(),
         )
 

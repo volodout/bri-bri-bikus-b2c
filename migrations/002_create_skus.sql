@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS skus (
     product_id uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 255),
     price bigint NOT NULL CHECK (price > 0),
-    cost_price bigint NOT NULL CHECK (cost_price > 0),
+    cost_price bigint CHECK (cost_price IS NULL OR cost_price > 0),
     discount bigint NOT NULL DEFAULT 0 CHECK (discount >= 0),
     image text NOT NULL,
     active_quantity integer NOT NULL DEFAULT 0 CHECK (active_quantity >= 0),
