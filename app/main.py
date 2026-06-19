@@ -13,6 +13,10 @@ from app.errors import (
     service_error_handler,
     validation_exception_handler,
 )
+from app.b2c_events import (
+    HttpProductDeletionGateway,
+    ProductDeletionGateway,
+)
 from app.inventory import (
     B2CGateway,
     HttpB2CGateway,
@@ -43,6 +47,7 @@ def create_app(
     b2c_gateway: B2CGateway | None = None,
     processed_event_store: ProcessedEventStore | None = None,
     b2c_catalog_gateway: B2CCatalogGateway | None = None,
+    product_deletion_gateway: ProductDeletionGateway | None = None,
 ) -> FastAPI:
     repository = product_repository or PostgresProductRepository(settings.database_url)
     sku_repo = sku_repository or PostgresSkuRepository(settings.database_url)
@@ -53,6 +58,9 @@ def create_app(
     b2c = b2c_gateway or HttpB2CGateway(settings.b2c_url, settings.b2b_to_b2c_key)
     processed_store = processed_event_store or PostgresProcessedEventStore(settings.database_url)
     b2c_catalog = b2c_catalog_gateway or HttpB2CCatalogGateway(
+        settings.b2c_url, settings.b2b_to_b2c_key
+    )
+    product_deletion = product_deletion_gateway or HttpProductDeletionGateway(
         settings.b2c_url, settings.b2b_to_b2c_key
     )
 
@@ -74,7 +82,7 @@ def create_app(
     )
     app.state.product_repository = repository
     app.state.sku_repository = sku_repo
-    app.state.product_service = ProductService(repository, gateway)
+    app.state.product_service = ProductService(repository, gateway, sku_repo, product_deletion)
     app.state.sku_service = SkuService(repository, sku_repo, gateway)
     app.state.product_view_service = ProductViewService(repository, sku_repo)
     app.state.reserve_store = store

@@ -13,8 +13,13 @@ except ImportError:
 from typing import Any, Iterable, Mapping, Protocol
 from uuid import UUID, uuid4
 
+from app.b2c_events import ProductDeletedEvent, ProductDeletionGateway
 from app.errors import Forbidden, InvalidRequest, NotFound, NotOwner
 from app.moderation import ModerationGateway, ProductEvent, event_timestamp
+
+
+DEFAULT_LIST_LIMIT = 20
+MAX_LIST_LIMIT = 100
 
 
 class _Missing:
@@ -120,6 +125,8 @@ class ProductRepository(Protocol):
 
     async def update_product_status(self, product_id: str, status: ProductStatus) -> None: ...
 
+    async def mark_product_deleted(self, product_id: str) -> Product | None: ...
+
     async def update_moderation_state(
         self,
         product_id: str,
@@ -129,6 +136,10 @@ class ProductRepository(Protocol):
     ) -> None: ...
 
     async def aclose(self) -> None: ...
+
+
+class ProductSkuRepository(Protocol):
+    async def list_skus(self, product_id: str) -> tuple[Any, ...]: ...
 
 
 def ensure_owner(product: Product, seller_id: str) -> None:
@@ -169,9 +180,17 @@ async def remoderate_on_edit(
 
 
 class ProductService:
-    def __init__(self, repository: ProductRepository, moderation: ModerationGateway) -> None:
+    def __init__(
+        self,
+        repository: ProductRepository,
+        moderation: ModerationGateway,
+        sku_repository: ProductSkuRepository,
+        product_deletion_gateway: ProductDeletionGateway,
+    ) -> None:
         self._repository = repository
         self._moderation = moderation
+        self._sku_repository = sku_repository
+        self._product_deletion_gateway = product_deletion_gateway
 
     async def create_product(self, seller_id: str, payload: ProductCreate) -> Product:
         category = await self._repository.get_category(payload.category_id)
@@ -236,6 +255,78 @@ class ProductService:
         await remoderate_on_edit(product, self._repository, self._moderation)
         return await self._repository.get_product(product_id)
 
+    async def delete_product(self, seller_id: str, product_id: str) -> None:
+        if not _is_uuid(product_id):
+            raise NotFound("Product not found")
+        product = await self._repository.get_product(product_id)
+        if product is None:
+            raise NotFound("Product not found")
+        ensure_owner(product, seller_id)
+        if product.deleted:
+            raise InvalidRequest("Product already deleted")
+
+        skus = await self._sku_repository.list_skus(product.id)
+        deleted = await self._repository.mark_product_deleted(product.id)
+        if deleted is None:
+            raise NotFound("Product not found")
+
+        await self._moderation.publish_product_event(
+            ProductEvent(
+                idempotency_key=str(uuid4()),
+                product_id=product.id,
+                seller_id=product.seller_id,
+                event="DELETED",
+                date=event_timestamp(),
+                json_after=to_product_response(deleted),
+                json_before=to_product_response(product),
+                category_id=product.category.id,
+            )
+        )
+        await self._product_deletion_gateway.publish_product_deleted(
+            ProductDeletedEvent(
+                product_id=product.id,
+                sku_ids=tuple(str(sku.id) for sku in skus),
+            )
+        )
+
+    async def list_seller_products(
+        self,
+        seller_id: str,
+        *,
+        limit: int = DEFAULT_LIST_LIMIT,
+        offset: int = 0,
+        status: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        limit = _clamp_list_limit(limit)
+        offset = max(0, offset)
+        status_filter: ProductStatus | None = None
+        if status is not None:
+            try:
+                status_filter = ProductStatus(status)
+            except ValueError:
+                raise InvalidRequest("status must be a valid product status")
+
+        products = [
+            product
+            for product in await self._repository.list_products()
+            if product.seller_id == seller_id and not product.deleted
+        ]
+        if status_filter is not None:
+            products = [product for product in products if product.status == status_filter]
+        if search:
+            needle = search.lower()
+            products = [product for product in products if needle in product.title.lower()]
+
+        products = sorted(products, key=lambda product: product.created_at, reverse=True)
+        total = len(products)
+        page = products[offset : offset + limit]
+        items = []
+        for product in page:
+            skus = await self._sku_repository.list_skus(product.id)
+            items.append(_seller_list_item(product, skus))
+        return {"items": items, "total_count": total, "limit": limit, "offset": offset}
+
 
 class InMemoryProductRepository:
     def __init__(self, categories: Iterable[Category] | None = None) -> None:
@@ -266,6 +357,14 @@ class InMemoryProductRepository:
         product = self._products.get(product_id)
         if product is not None:
             self._products[product_id] = replace(product, status=status, updated_at=_utcnow())
+
+    async def mark_product_deleted(self, product_id: str) -> Product | None:
+        product = self._products.get(product_id)
+        if product is None:
+            return None
+        updated = replace(product, deleted=True, updated_at=_utcnow())
+        self._products[product_id] = updated
+        return updated
 
     async def update_moderation_state(
         self,
@@ -523,6 +622,15 @@ class PostgresProductRepository:
                 status.value,
             )
 
+    async def mark_product_deleted(self, product_id: str) -> Product | None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            await connection.execute(
+                "UPDATE products SET deleted = true, updated_at = now() WHERE id = $1",
+                UUID(product_id),
+            )
+        return await self.get_product(product_id)
+
     async def update_moderation_state(
         self,
         product_id: str,
@@ -641,6 +749,30 @@ def to_product_response(product: Product) -> dict[str, Any]:
         "created_at": _serialize_datetime(product.created_at),
         "updated_at": _serialize_datetime(product.updated_at),
     }
+
+
+def _seller_list_item(product: Product, skus: Iterable[Any]) -> dict[str, Any]:
+    skus = tuple(skus)
+    return {
+        "id": product.id,
+        "title": product.title,
+        "status": product.status.value,
+        "deleted": product.deleted,
+        "category": {"id": product.category.id, "name": product.category.name},
+        "images": [
+            {"id": image.id, "url": image.url, "ordering": image.ordering}
+            for image in product.images
+        ],
+        "skus_count": len(skus),
+        "total_active_quantity": sum(int(getattr(sku, "active_quantity", 0)) for sku in skus),
+        "created_at": _serialize_datetime(product.created_at),
+    }
+
+
+def _clamp_list_limit(limit: int) -> int:
+    if limit < 1:
+        return 1
+    return min(limit, MAX_LIST_LIMIT)
 
 
 def _parse_images(value: Any) -> tuple[ProductImage, ...]:

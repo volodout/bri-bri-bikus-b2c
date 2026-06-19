@@ -26,6 +26,25 @@ def get_product_view_service(request: Request) -> ProductViewService:
     return request.app.state.product_view_service
 
 
+@router.get("/api/v1/products", status_code=200)
+async def list_products(
+    request: Request,
+    limit: int = 20,
+    offset: int = 0,
+    status: str | None = None,
+    search: str | None = None,
+) -> JSONResponse:
+    seller_id = seller_id_from_jwt(request)
+    result = await get_product_service(request).list_seller_products(
+        seller_id,
+        limit=limit,
+        offset=offset,
+        status=status,
+        search=search,
+    )
+    return JSONResponse(status_code=200, content=result)
+
+
 @router.get("/api/v1/products/{product_id}", status_code=200)
 async def get_product(product_id: str, request: Request) -> JSONResponse:
     # Dual mode: seller (Bearer JWT, ownership enforced) or Moderation
@@ -61,3 +80,10 @@ async def update_product(product_id: str, request: Request) -> JSONResponse:
     payload = parse_product_update(raw_payload)
     product = await get_product_service(request).update_product(seller_id, product_id, payload)
     return JSONResponse(status_code=200, content=to_product_response(product))
+
+
+@router.delete("/api/v1/products/{product_id}", status_code=200)
+async def delete_product(product_id: str, request: Request) -> JSONResponse:
+    seller_id = seller_id_from_jwt(request)
+    await get_product_service(request).delete_product(seller_id, product_id)
+    return JSONResponse(status_code=200, content={"ok": True})
