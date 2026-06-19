@@ -111,6 +111,34 @@ async def test_edit_on_moderation_product_emits_no_new_event(
     assert moderation_gateway.events == []
 
 
+async def test_partial_product_patch_updates_only_sent_fields(
+    client, product_repository, moderation_gateway
+):
+    product = await seed_product(product_repository, status=ProductStatus.MODERATED)
+
+    async with client as ac:
+        response = await ac.patch(
+            f"/api/v1/products/{product.id}",
+            json={"title": "Only title changed"},
+            headers=auth_headers(),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["title"] == "Only title changed"
+    assert body["description"] == product.description
+    assert body["category_id"] == product.category.id
+    assert body["images"][0]["url"] == product.images[0].url
+
+    stored = await product_repository.get_product(product.id)
+    assert stored.title == "Only title changed"
+    assert stored.description == product.description
+    assert stored.category.id == product.category.id
+    assert stored.images == product.images
+    assert stored.status == ProductStatus.ON_MODERATION
+    assert moderation_gateway.events[0].event == "EDITED"
+
+
 # --- editing a SKU: reserves + parent re-moderation -----------------------
 
 
@@ -161,6 +189,43 @@ async def test_edit_sku_returns_blocked_parent_to_on_moderation(
     assert (await product_repository.get_product(product.id)).status == ProductStatus.ON_MODERATION
     assert moderation_gateway.events[0].event == "EDITED"
     assert moderation_gateway.events[0].product_id == product.id
+
+
+async def test_partial_sku_patch_updates_only_sent_fields(
+    client, product_repository, sku_repository, moderation_gateway
+):
+    product = await seed_product(product_repository, status=ProductStatus.MODERATED)
+    sku = await seed_sku(
+        sku_repository,
+        product_id=product.id,
+        reserved_quantity=2,
+        active_quantity=7,
+    )
+
+    async with client as ac:
+        response = await ac.patch(
+            f"/api/v1/skus/{sku.id}",
+            json={"name": "128GB Blue"},
+            headers=auth_headers(),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "128GB Blue"
+    assert body["price"] == sku.price
+    assert body["cost_price"] == sku.cost_price
+    assert body["discount"] == sku.discount
+    assert body["reserved_quantity"] == 2
+    assert body["active_quantity"] == 7
+
+    stored = await sku_repository.get_sku(sku.id)
+    assert stored.name == "128GB Blue"
+    assert stored.price == sku.price
+    assert stored.cost_price == sku.cost_price
+    assert stored.image == sku.image
+    assert stored.characteristics == sku.characteristics
+    assert (await product_repository.get_product(product.id)).status == ProductStatus.ON_MODERATION
+    assert moderation_gateway.events[0].event == "EDITED"
 
 
 # --- unhappy: ownership / hard-block / not found / validation -------------
@@ -299,13 +364,11 @@ async def test_edit_sku_not_found_returns_404(client):
 
 async def test_edit_product_invalid_data_returns_400(client, product_repository):
     product = await seed_product(product_repository, status=ProductStatus.MODERATED)
-    payload = valid_product_update_payload()
-    payload.pop("title")
 
     async with client as ac:
         response = await ac.patch(
             f"/api/v1/products/{product.id}",
-            json=payload,
+            json={"title": "  "},
             headers=auth_headers(),
         )
 

@@ -23,6 +23,13 @@ from app.products import (
 )
 
 
+class _Missing:
+    pass
+
+
+MISSING = _Missing()
+
+
 @dataclass(frozen=True)
 class SkuCreate:
     product_id: str
@@ -36,12 +43,12 @@ class SkuCreate:
 
 @dataclass(frozen=True)
 class SkuUpdate:
-    name: str
-    price: int
-    cost_price: int
-    discount: int
-    image: str
-    characteristics: tuple[CharacteristicValue, ...] = ()
+    name: str | _Missing = MISSING
+    price: int | _Missing = MISSING
+    cost_price: int | None | _Missing = MISSING
+    discount: int | _Missing = MISSING
+    image: str | _Missing = MISSING
+    characteristics: tuple[CharacteristicValue, ...] | _Missing = MISSING
 
 
 @dataclass(frozen=True)
@@ -182,16 +189,23 @@ class SkuService:
         if product.status == ProductStatus.HARD_BLOCKED:
             raise Forbidden("Cannot edit hard-blocked product")
 
+        if _is_missing_sku_update(payload):
+            return sku
+
         # active_quantity / reserved_quantity are deliberately preserved: B2B does
         # not touch reserves on edit (see canon "Политика при активных резервах").
         updated = replace(
             sku,
-            name=payload.name,
-            price=payload.price,
-            cost_price=payload.cost_price,
-            discount=payload.discount,
-            image=payload.image,
-            characteristics=payload.characteristics,
+            name=sku.name if payload.name is MISSING else payload.name,
+            price=sku.price if payload.price is MISSING else payload.price,
+            cost_price=sku.cost_price if payload.cost_price is MISSING else payload.cost_price,
+            discount=sku.discount if payload.discount is MISSING else payload.discount,
+            image=sku.image if payload.image is MISSING else payload.image,
+            characteristics=(
+                sku.characteristics
+                if payload.characteristics is MISSING
+                else payload.characteristics
+            ),
         )
         saved = await self._skus.update_sku(updated)
         # Editing a SKU returns the parent product to moderation.
@@ -505,7 +519,14 @@ def parse_sku_update(payload: Any) -> SkuUpdate:
     if not isinstance(payload, Mapping):
         raise InvalidRequest("Request body must be a JSON object")
 
-    return SkuUpdate(**_parse_sku_fields(payload))
+    return SkuUpdate(
+        name=_optional_string(payload, "name", max_length=255),
+        price=_optional_positive_int(payload, "price"),
+        cost_price=_optional_cost_price(payload),
+        discount=_optional_non_negative_int_for_patch(payload, "discount"),
+        image=_optional_primary_image_url(payload, "images"),
+        characteristics=_optional_characteristics(payload, "characteristics"),
+    )
 
 
 def to_sku_response(sku: Sku) -> dict[str, Any]:
@@ -546,6 +567,64 @@ def _parse_sku_fields(
         "image": _primary_image_url(payload.get("images")),
         "characteristics": _parse_characteristics(payload.get("characteristics", [])),
     }
+
+
+def _optional_string(
+    payload: Mapping[str, Any], field_name: str, *, max_length: int
+) -> str | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _required_string(payload, field_name, max_length=max_length)
+
+
+def _optional_positive_int(payload: Mapping[str, Any], field_name: str) -> int | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _required_positive_int(payload, field_name)
+
+
+def _optional_cost_price(payload: Mapping[str, Any]) -> int | None | _Missing:
+    if "cost_price" not in payload:
+        return MISSING
+    if payload.get("cost_price") is None:
+        return None
+    return _required_positive_int(payload, "cost_price")
+
+
+def _optional_non_negative_int_for_patch(
+    payload: Mapping[str, Any], field_name: str
+) -> int | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _optional_non_negative_int(payload, field_name)
+
+
+def _optional_primary_image_url(payload: Mapping[str, Any], field_name: str) -> str | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _primary_image_url(payload.get(field_name))
+
+
+def _optional_characteristics(
+    payload: Mapping[str, Any], field_name: str
+) -> tuple[CharacteristicValue, ...] | _Missing:
+    if field_name not in payload or payload.get(field_name) is None:
+        return MISSING
+    return _parse_characteristics(payload.get(field_name))
+
+
+def _is_missing_sku_update(payload: SkuUpdate) -> bool:
+    return all(
+        value is MISSING
+        for value in (
+            payload.name,
+            payload.price,
+            payload.cost_price,
+            payload.discount,
+            payload.image,
+            payload.characteristics,
+        )
+    )
 
 
 def _primary_image_url(value: Any) -> str:

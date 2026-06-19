@@ -7,7 +7,12 @@ from fastapi.responses import JSONResponse
 
 from app.auth import seller_id_from_jwt, viewer_from_request
 from app.errors import InvalidRequest
-from app.products import ProductService, parse_product_create, to_product_response
+from app.products import (
+    ProductService,
+    parse_product_create,
+    parse_product_update,
+    to_product_response,
+)
 from app.views import ProductViewService, to_product_view
 
 router = APIRouter()
@@ -53,6 +58,6 @@ async def update_product(product_id: str, request: Request) -> JSONResponse:
     except JSONDecodeError:
         raise InvalidRequest("Request body must be valid JSON")
 
-    payload = parse_product_create(raw_payload)
+    payload = parse_product_update(raw_payload)
     product = await get_product_service(request).update_product(seller_id, product_id, payload)
     return JSONResponse(status_code=200, content=to_product_response(product))
