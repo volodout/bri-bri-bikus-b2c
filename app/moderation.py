@@ -7,7 +7,11 @@ from typing import Any, Protocol
 from app.errors import ServiceUnavailable
 
 # Internal event kind -> Moderation's IncomingB2BEvent.event_type wire value.
-_WIRE_EVENT_TYPE = {"CREATED": "PRODUCT_CREATED", "EDITED": "PRODUCT_EDITED"}
+_WIRE_EVENT_TYPE = {
+    "CREATED": "PRODUCT_CREATED",
+    "EDITED": "PRODUCT_EDITED",
+    "DELETED": "PRODUCT_DELETED",
+}
 
 
 @dataclass(frozen=True)
@@ -15,7 +19,7 @@ class ProductEvent:
     idempotency_key: str
     product_id: str
     seller_id: str
-    event: str  # internal kind: "CREATED" | "EDITED"
+    event: str  # internal kind: "CREATED" | "EDITED" | "DELETED"
     date: str  # UTC ISO-8601 with milliseconds + Z
     json_after: dict[str, Any] = field(default_factory=dict)
     json_before: dict[str, Any] | None = None

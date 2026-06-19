@@ -7,6 +7,7 @@ import httpx
 import jwt
 import pytest
 
+from app.b2c_events import RecordingProductDeletionGateway
 from app.config import settings
 from app.main import create_app
 from app.products import (
@@ -91,6 +92,11 @@ def b2c_catalog_gateway() -> RecordingB2CCatalogGateway:
 
 
 @pytest.fixture
+def product_deletion_gateway() -> RecordingProductDeletionGateway:
+    return RecordingProductDeletionGateway()
+
+
+@pytest.fixture
 def client(
     product_repository: InMemoryProductRepository,
     sku_repository: InMemorySkuRepository,
@@ -99,6 +105,7 @@ def client(
     b2c_gateway: RecordingB2CGateway,
     processed_event_store: InMemoryProcessedEventStore,
     b2c_catalog_gateway: RecordingB2CCatalogGateway,
+    product_deletion_gateway: RecordingProductDeletionGateway,
 ):
     app = create_app(
         product_repository=product_repository,
@@ -108,6 +115,7 @@ def client(
         b2c_gateway=b2c_gateway,
         processed_event_store=processed_event_store,
         b2c_catalog_gateway=b2c_catalog_gateway,
+        product_deletion_gateway=product_deletion_gateway,
     )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://b2b.test")
