@@ -24,6 +24,11 @@ from app.inventory import (
     PostgresReserveStore,
     ReserveStore,
 )
+from app.invoices import (
+    InvoiceRepository,
+    InvoiceService,
+    PostgresInvoiceRepository,
+)
 from app.catalog import CatalogService
 from app.moderation import HttpModerationGateway, ModerationGateway
 from app.moderation_inbound import (
@@ -34,7 +39,7 @@ from app.moderation_inbound import (
     ProcessedEventStore,
 )
 from app.products import PostgresProductRepository, ProductRepository, ProductService
-from app.routes import catalog, moderation, products, reserve, skus
+from app.routes import catalog, invoices, moderation, products, reserve, skus
 from app.skus import PostgresSkuRepository, SkuRepository, SkuService
 from app.views import ProductViewService
 
@@ -48,6 +53,7 @@ def create_app(
     processed_event_store: ProcessedEventStore | None = None,
     b2c_catalog_gateway: B2CCatalogGateway | None = None,
     product_deletion_gateway: ProductDeletionGateway | None = None,
+    invoice_repository: InvoiceRepository | None = None,
 ) -> FastAPI:
     repository = product_repository or PostgresProductRepository(settings.database_url)
     sku_repo = sku_repository or PostgresSkuRepository(settings.database_url)
@@ -63,6 +69,7 @@ def create_app(
     product_deletion = product_deletion_gateway or HttpProductDeletionGateway(
         settings.b2c_url, settings.b2b_to_b2c_key
     )
+    invoice_repo = invoice_repository or PostgresInvoiceRepository(settings.database_url)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -73,6 +80,7 @@ def create_app(
             await sku_repo.aclose()
             await store.aclose()
             await processed_store.aclose()
+            await invoice_repo.aclose()
 
     app = FastAPI(
         title="NeoMarket B2B Seller Cabinet",
@@ -91,6 +99,7 @@ def create_app(
         repository, processed_store, b2c_catalog
     )
     app.state.catalog_service = CatalogService(repository, sku_repo)
+    app.state.invoice_service = InvoiceService(repository, sku_repo, invoice_repo)
 
     app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(StarletteHTTPException, http_exception_handler)
@@ -98,6 +107,7 @@ def create_app(
 
     app.include_router(products.router)
     app.include_router(skus.router)
+    app.include_router(invoices.router)
     app.include_router(reserve.router)
     app.include_router(moderation.router)
     app.include_router(catalog.router)

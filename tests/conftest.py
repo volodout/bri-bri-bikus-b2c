@@ -20,6 +20,7 @@ from app.products import (
     ProductStatus,
 )
 from app.inventory import InMemoryReserveStore, RecordingB2CGateway
+from app.invoices import InMemoryInvoiceRepository
 from app.moderation import RecordingModerationGateway
 from app.moderation_inbound import InMemoryProcessedEventStore, RecordingB2CCatalogGateway
 from app.skus import InMemorySkuRepository, Sku
@@ -97,6 +98,11 @@ def product_deletion_gateway() -> RecordingProductDeletionGateway:
 
 
 @pytest.fixture
+def invoice_repository() -> InMemoryInvoiceRepository:
+    return InMemoryInvoiceRepository()
+
+
+@pytest.fixture
 def client(
     product_repository: InMemoryProductRepository,
     sku_repository: InMemorySkuRepository,
@@ -106,6 +112,7 @@ def client(
     processed_event_store: InMemoryProcessedEventStore,
     b2c_catalog_gateway: RecordingB2CCatalogGateway,
     product_deletion_gateway: RecordingProductDeletionGateway,
+    invoice_repository: InMemoryInvoiceRepository,
 ):
     app = create_app(
         product_repository=product_repository,
@@ -116,6 +123,7 @@ def client(
         processed_event_store=processed_event_store,
         b2c_catalog_gateway=b2c_catalog_gateway,
         product_deletion_gateway=product_deletion_gateway,
+        invoice_repository=invoice_repository,
     )
     transport = httpx.ASGITransport(app=app)
     return httpx.AsyncClient(transport=transport, base_url="http://b2b.test")
