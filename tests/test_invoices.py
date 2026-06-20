@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from app.products import ProductStatus
 from tests.conftest import (
     OTHER_SELLER_ID,
@@ -34,18 +36,20 @@ async def test_create_invoice_with_moderated_sku_returns_201(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["status"] == "PENDING"
+    assert body["status"] == "CREATED"
+    assert body["seller_id"] == SELLER_ID
     assert body["created_at"]
-    assert body["items"] == [
-        {
-            "sku_id": sku.id,
-            "sku_name": sku.name,
-            "quantity": 10,
-            "accepted_quantity": None,
-        }
-    ]
+    assert body["updated_at"]
+
+    assert len(body["items"]) == 1
+    item = body["items"][0]
+    UUID(item["id"])  # must be a valid UUID
+    assert item["sku_id"] == sku.id
+    assert item["quantity"] == 10
+    assert item["accepted_quantity"] is None
+
     stored = await invoice_repository.get_invoice(body["id"])
-    assert stored.status == "PENDING"
+    assert stored.status == "CREATED"
     assert stored.seller_id == SELLER_ID
 
 

@@ -23,6 +23,7 @@ class InvoiceCreate:
 
 @dataclass(frozen=True)
 class InvoiceItem:
+    id: str
     sku_id: str
     sku_name: str
     quantity: int
@@ -73,6 +74,7 @@ class InvoiceService:
 
             items.append(
                 InvoiceItem(
+                    id=str(uuid4()),
                     sku_id=sku.id,
                     sku_name=sku.name,
                     quantity=requested.quantity,
@@ -83,7 +85,7 @@ class InvoiceService:
         invoice = Invoice(
             id=str(uuid4()),
             seller_id=seller_id,
-            status="PENDING",
+            status="CREATED",
             items=tuple(items),
         )
         return await self._invoices.create_invoice(invoice)
@@ -135,7 +137,7 @@ class PostgresInvoiceRepository:
                         )
                         VALUES ($1, $2, $3, $4, $5, $6)
                         """,
-                        uuid4(),
+                        UUID(item.id),
                         UUID(invoice.id),
                         UUID(item.sku_id),
                         item.sku_name,
@@ -181,12 +183,14 @@ def parse_invoice_create(payload: Any) -> InvoiceCreate:
 def to_invoice_response(invoice: Invoice) -> dict[str, Any]:
     return {
         "id": invoice.id,
+        "seller_id": invoice.seller_id,
         "status": invoice.status,
         "created_at": _serialize_datetime(invoice.created_at),
+        "updated_at": _serialize_datetime(invoice.updated_at),
         "items": [
             {
+                "id": item.id,
                 "sku_id": item.sku_id,
-                "sku_name": item.sku_name,
                 "quantity": item.quantity,
                 "accepted_quantity": item.accepted_quantity,
             }
