@@ -19,10 +19,11 @@ class ProductDeletedEvent:
     def as_payload(self) -> dict[str, Any]:
         return {
             "idempotency_key": self.idempotency_key,
-            "event": self.event,
-            "product_id": self.product_id,
-            "sku_ids": list(self.sku_ids),
-            "date": self.date,
+            "event_type": self.event,
+            "occurred_at": self.date,
+            "payload": {
+                "product_id": self.product_id,
+            }
         }
 
 
@@ -55,7 +56,7 @@ class HttpProductDeletionGateway:
         async with httpx.AsyncClient(transport=self._transport, timeout=self._timeout) as client:
             try:
                 response = await client.post(
-                    f"{self._base_url}/api/v1/events/product",
+                    f"{self._base_url}/api/v1/b2b/events",
                     headers={"X-Service-Key": self._service_key},
                     json=event.as_payload(),
                 )

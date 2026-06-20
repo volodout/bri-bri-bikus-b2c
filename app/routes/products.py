@@ -3,7 +3,7 @@ from __future__ import annotations
 from json import JSONDecodeError
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.auth import seller_id_from_jwt, viewer_from_request
 from app.errors import InvalidRequest
@@ -82,8 +82,8 @@ async def update_product(product_id: str, request: Request) -> JSONResponse:
     return JSONResponse(status_code=200, content=to_product_response(product))
 
 
-@router.delete("/api/v1/products/{product_id}", status_code=200)
-async def delete_product(product_id: str, request: Request) -> JSONResponse:
+@router.delete("/api/v1/products/{product_id}", status_code=204)
+async def delete_product(product_id: str, request: Request) -> Response:
     seller_id = seller_id_from_jwt(request)
     await get_product_service(request).delete_product(seller_id, product_id)
-    return JSONResponse(status_code=200, content={"ok": True})
+    return Response(status_code=204)

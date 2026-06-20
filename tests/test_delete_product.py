@@ -22,8 +22,8 @@ async def test_delete_sets_deleted_true(client, product_repository):
     async with client as ac:
         response = await ac.delete(f"/api/v1/products/{product.id}", headers=auth_headers())
 
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
+    assert response.status_code == 204
+    assert response.content == b""
     deleted = await product_repository.get_product(product.id)
     assert deleted.deleted is True
 
@@ -36,7 +36,7 @@ async def test_delete_emits_event_to_moderation(
     async with client as ac:
         response = await ac.delete(f"/api/v1/products/{product.id}", headers=auth_headers())
 
-    assert response.status_code == 200
+    assert response.status_code == 204
     assert len(moderation_gateway.events) == 1
     event = moderation_gateway.events[0]
     assert event.event == "DELETED"
@@ -55,7 +55,7 @@ async def test_delete_emits_product_deleted_to_b2c(
     async with client as ac:
         response = await ac.delete(f"/api/v1/products/{product.id}", headers=auth_headers())
 
-    assert response.status_code == 200
+    assert response.status_code == 204
     assert len(product_deletion_gateway.events) == 1
     event = product_deletion_gateway.events[0]
     assert event.event == "PRODUCT_DELETED"
@@ -110,7 +110,7 @@ async def test_deleted_product_not_in_seller_list(client, product_repository):
         removed = await ac.delete(f"/api/v1/products/{deleted.id}", headers=auth_headers())
         listed = await ac.get("/api/v1/products", headers=auth_headers())
 
-    assert removed.status_code == 200
+    assert removed.status_code == 204
     assert listed.status_code == 200
     ids = [item["id"] for item in listed.json()["items"]]
     assert ids == [visible.id]
@@ -140,12 +140,13 @@ async def test_product_deleted_event_conforms_to_b2c_flow():
         )
     )
 
-    assert captured["url"] == "http://b2c.test/api/v1/events/product"
+    assert captured["url"] == "http://b2c.test/api/v1/b2b/events"
     assert captured["service_key"] == "b2c-key"
     assert captured["body"] == {
         "idempotency_key": "11111111-1111-1111-1111-111111111111",
-        "event": "PRODUCT_DELETED",
-        "product_id": "22222222-2222-2222-2222-222222222222",
-        "sku_ids": ["33333333-3333-3333-3333-333333333333"],
-        "date": "2026-03-16T09:00:00.000Z",
+        "event_type": "PRODUCT_DELETED",
+        "payload": {
+            "product_id": "22222222-2222-2222-2222-222222222222",
+        },
+        "occurred_at": "2026-03-16T09:00:00.000Z",
     }
