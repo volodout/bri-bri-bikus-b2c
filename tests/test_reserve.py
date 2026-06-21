@@ -57,6 +57,13 @@ def unreserve_body(items, order_id=None):
     }
 
 
+def fulfill_body(items, order_id=None):
+    return {
+        "order_id": order_id or str(uuid4()),
+        "items": [{"sku_id": sku_id, "quantity": qty} for sku_id, qty in items],
+    }
+
+
 # --- happy path -----------------------------------------------------------
 
 
@@ -254,3 +261,66 @@ async def test_reserve_invalid_quantity_returns_400(client, sku_repository):
 
     assert response.status_code == 400
     assert response.json()["code"] == "INVALID_REQUEST"
+
+
+async def test_fulfill_decreases_reserved_quantity(client, sku_repository):
+    pid = str(uuid4())
+    sku = await seed_sku(sku_repository, product_id=pid, active_quantity=8, reserved_quantity=5)
+
+    async with client as ac:
+        response = await ac.post(
+            "/api/v1/inventory/fulfill",
+            json=fulfill_body([(sku.id, 3)]),
+            headers=b2c_service_headers(),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "FULFILLED"
+    assert body["processed_at"]
+    assert "order_id" in body
+    sku_after = await sku_repository.get_sku(sku.id)
+    assert sku_after.reserved_quantity == 2
+
+
+async def test_active_quantity_unchanged(client, sku_repository):
+    pid = str(uuid4())
+    sku = await seed_sku(sku_repository, product_id=pid, active_quantity=8, reserved_quantity=5)
+
+    async with client as ac:
+        await ac.post(
+            "/api/v1/inventory/fulfill",
+            json=fulfill_body([(sku.id, 3)]),
+            headers=b2c_service_headers(),
+        )
+
+    sku_after = await sku_repository.get_sku(sku.id)
+    assert sku_after.active_quantity == 8
+
+
+async def test_idempotent_fulfill_no_double_deduction(client, sku_repository):
+    pid = str(uuid4())
+    sku = await seed_sku(sku_repository, product_id=pid, active_quantity=8, reserved_quantity=5)
+    payload = fulfill_body([(sku.id, 3)], order_id=str(uuid4()))
+
+    async with client as ac:
+        first = await ac.post("/api/v1/inventory/fulfill", json=payload, headers=b2c_service_headers())
+        second = await ac.post("/api/v1/inventory/fulfill", json=payload, headers=b2c_service_headers())
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    sku_after = await sku_repository.get_sku(sku.id)
+    assert sku_after.reserved_quantity == 2
+
+
+async def test_missing_service_key_returns_401(client, sku_repository):
+    pid = str(uuid4())
+    sku = await seed_sku(sku_repository, product_id=pid, active_quantity=5, reserved_quantity=3)
+    payload = fulfill_body([(sku.id, 1)])
+
+    async with client as ac:
+        response = await ac.post("/api/v1/inventory/fulfill", json=payload)
+
+    assert response.status_code == 401
+    sku_after = await sku_repository.get_sku(sku.id)
+    assert sku_after.reserved_quantity == 3

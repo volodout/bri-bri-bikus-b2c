@@ -30,6 +30,12 @@ class UnreserveRequest:
     items: tuple[ReserveItem, ...]
 
 
+@dataclass(frozen=True)
+class FulfillRequest:
+    order_id: str
+    items: tuple[ReserveItem, ...]
+
+
 @dataclass
 class ReserveResponse:
     reserved: bool
@@ -69,10 +75,6 @@ class ReserveStore(Protocol):
     async def get_reserve(self, idempotency_key: str) -> dict[str, Any] | None: ...
 
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None: ...
-
-    async def was_unreserved(self, order_id: str) -> bool: ...
-
-    async def mark_unreserved(self, order_id: str) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -130,10 +132,11 @@ class InventoryService:
         return ReserveResponse(reserved=True, order_id=request.order_id, reserved_at=reserved_at)
 
     async def unreserve(self, request: UnreserveRequest) -> str:
-        # Idempotent on order_id: a retried cancellation does not double-restore.
-        if not await self._store.was_unreserved(request.order_id):
-            await self._skus.unreserve([(item.sku_id, item.quantity) for item in request.items])
-            await self._store.mark_unreserved(request.order_id)
+        await self._skus.unreserve(request.order_id, [(item.sku_id, item.quantity) for item in request.items])
+        return event_timestamp()
+
+    async def fulfill(self, request: FulfillRequest) -> str:
+        await self._skus.fulfill(request.order_id, [(item.sku_id, item.quantity) for item in request.items])
         return event_timestamp()
 
 
@@ -174,19 +177,12 @@ class HttpB2CGateway:
 class InMemoryReserveStore:
     def __init__(self) -> None:
         self._reserves: dict[str, dict[str, Any]] = {}
-        self._unreserves: set[str] = set()
 
     async def get_reserve(self, idempotency_key: str) -> dict[str, Any] | None:
         return self._reserves.get(idempotency_key)
 
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None:
         self._reserves.setdefault(idempotency_key, result)
-
-    async def was_unreserved(self, order_id: str) -> bool:
-        return order_id in self._unreserves
-
-    async def mark_unreserved(self, order_id: str) -> None:
-        self._unreserves.add(order_id)
 
     async def aclose(self) -> None:
         return None
@@ -219,27 +215,6 @@ class PostgresReserveStore:
                 json.dumps(result),
             )
 
-    async def was_unreserved(self, order_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            row = await connection.fetchval(
-                "SELECT 1 FROM unreserve_operations WHERE order_id = $1",
-                UUID(order_id),
-            )
-        return row is not None
-
-    async def mark_unreserved(self, order_id: str) -> None:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            await connection.execute(
-                """
-                INSERT INTO unreserve_operations (order_id)
-                VALUES ($1)
-                ON CONFLICT (order_id) DO NOTHING
-                """,
-                UUID(order_id),
-            )
-
     async def aclose(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -267,6 +242,15 @@ def parse_unreserve_request(payload: Any) -> UnreserveRequest:
     if not isinstance(payload, Mapping):
         raise InvalidRequest("Request body must be a JSON object")
     return UnreserveRequest(
+        order_id=_required_uuid(payload, "order_id"),
+        items=_parse_items(payload.get("items")),
+    )
+
+
+def parse_fulfill_request(payload: Any) -> FulfillRequest:
+    if not isinstance(payload, Mapping):
+        raise InvalidRequest("Request body must be a JSON object")
+    return FulfillRequest(
         order_id=_required_uuid(payload, "order_id"),
         items=_parse_items(payload.get("items")),
     )

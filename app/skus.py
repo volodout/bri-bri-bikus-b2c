@@ -104,7 +104,9 @@ class SkuRepository(Protocol):
 
     async def reserve(self, items: Sequence[ReserveLine]) -> ReserveOutcome: ...
 
-    async def unreserve(self, items: Sequence[ReserveLine]) -> None: ...
+    async def unreserve(self, order_id: str, items: Sequence[ReserveLine]) -> bool: ...
+
+    async def fulfill(self, order_id: str, items: Sequence[ReserveLine]) -> bool: ...
 
     async def aclose(self) -> None: ...
 
@@ -216,6 +218,8 @@ class SkuService:
 class InMemorySkuRepository:
     def __init__(self) -> None:
         self._skus: dict[str, Sku] = {}
+        self._unreserved_orders: set[str] = set()
+        self._fulfilled_orders: set[str] = set()
 
     async def create_sku(self, sku: Sku) -> Sku:
         self._skus[sku.id] = sku
@@ -257,7 +261,9 @@ class InMemorySkuRepository:
                 depleted.append(sku_id)
         return ReserveOutcome(ok=True, reserved=tuple(reserved), depleted=tuple(depleted))
 
-    async def unreserve(self, items: Sequence[ReserveLine]) -> None:
+    async def unreserve(self, order_id: str, items: Sequence[ReserveLine]) -> bool:
+        if order_id in self._unreserved_orders:
+            return False
         for sku_id, quantity in items:
             sku = self._skus.get(sku_id)
             if sku is not None:
@@ -266,6 +272,24 @@ class InMemorySkuRepository:
                     active_quantity=sku.active_quantity + quantity,
                     reserved_quantity=sku.reserved_quantity - quantity,
                 )
+        self._unreserved_orders.add(order_id)
+        return True
+
+    async def fulfill(self, order_id: str, items: Sequence[ReserveLine]) -> bool:
+        if order_id in self._fulfilled_orders:
+            return False
+        for sku_id, quantity in items:
+            sku = self._skus.get(sku_id)
+            if sku is not None and sku.reserved_quantity < quantity:
+                raise InvalidRequest(
+                    f"SKU {sku_id}: cannot fulfill {quantity}, only {sku.reserved_quantity} reserved"
+                )
+        for sku_id, quantity in items:
+            sku = self._skus.get(sku_id)
+            if sku is not None:
+                self._skus[sku_id] = replace(sku, reserved_quantity=sku.reserved_quantity - quantity)
+        self._fulfilled_orders.add(order_id)
+        return True
 
     async def aclose(self) -> None:
         return None
@@ -462,10 +486,17 @@ class PostgresSkuRepository:
                         depleted.append(sku_id)
         return ReserveOutcome(ok=True, reserved=tuple(reserved), depleted=tuple(depleted))
 
-    async def unreserve(self, items: Sequence[ReserveLine]) -> None:
+    async def unreserve(self, order_id: str, items: Sequence[ReserveLine]) -> bool:
         pool = await self._get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                inserted = await connection.fetchval(
+                    "INSERT INTO unreserve_operations (order_id) VALUES ($1) "
+                    "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
+                    UUID(order_id),
+                )
+                if inserted is None:
+                    return False
                 for sku_id, quantity in items:
                     await connection.execute(
                         """
@@ -478,6 +509,35 @@ class PostgresSkuRepository:
                         UUID(sku_id),
                         quantity,
                     )
+        return True
+
+    async def fulfill(self, order_id: str, items: Sequence[ReserveLine]) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                inserted = await connection.fetchval(
+                    "INSERT INTO fulfill_operations (order_id) VALUES ($1) "
+                    "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
+                    UUID(order_id),
+                )
+                if inserted is None:
+                    return False
+                for sku_id, quantity in items:
+                    result = await connection.execute(
+                        """
+                        UPDATE skus SET
+                            reserved_quantity = reserved_quantity - $2,
+                            updated_at = now()
+                        WHERE id = $1 AND reserved_quantity >= $2
+                        """,
+                        UUID(sku_id),
+                        quantity,
+                    )
+                    if result == "UPDATE 0":
+                        raise InvalidRequest(
+                            f"SKU {sku_id}: insufficient reserved quantity"
+                        )
+        return True
 
     async def aclose(self) -> None:
         if self._pool is not None:

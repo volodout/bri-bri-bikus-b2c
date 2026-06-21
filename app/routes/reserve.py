@@ -10,6 +10,7 @@ from app.config import settings
 from app.errors import InvalidRequest
 from app.inventory import (
     InventoryService,
+    parse_fulfill_request,
     parse_reserve_request,
     parse_unreserve_request,
     to_reserve_response,
@@ -46,4 +47,15 @@ async def unreserve(request: Request) -> JSONResponse:
     return JSONResponse(
         status_code=200,
         content={"order_id": payload.order_id, "status": "UNRESERVED", "processed_at": processed_at},
+    )
+
+
+@router.post("/api/v1/inventory/fulfill", status_code=200)
+async def fulfill(request: Request) -> JSONResponse:
+    require_service_key(request, settings.b2c_to_b2b_key)
+    payload = parse_fulfill_request(await _json_body(request))
+    processed_at = await get_inventory_service(request).fulfill(payload)
+    return JSONResponse(
+        status_code=200,
+        content={"order_id": payload.order_id, "status": "FULFILLED", "processed_at": processed_at},
     )
