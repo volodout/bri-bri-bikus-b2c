@@ -76,13 +76,9 @@ class ReserveStore(Protocol):
 
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None: ...
 
-    async def was_unreserved(self, order_id: str) -> bool: ...
+    async def try_mark_unreserved(self, order_id: str) -> bool: ...
 
-    async def mark_unreserved(self, order_id: str) -> None: ...
-
-    async def was_fulfilled(self, order_id: str) -> bool: ...
-
-    async def mark_fulfilled(self, order_id: str) -> None: ...
+    async def try_mark_fulfilled(self, order_id: str) -> bool: ...
 
     async def aclose(self) -> None: ...
 
@@ -140,16 +136,13 @@ class InventoryService:
         return ReserveResponse(reserved=True, order_id=request.order_id, reserved_at=reserved_at)
 
     async def unreserve(self, request: UnreserveRequest) -> str:
-        # Idempotent on order_id: a retried cancellation does not double-restore.
-        if not await self._store.was_unreserved(request.order_id):
+        if await self._store.try_mark_unreserved(request.order_id):
             await self._skus.unreserve([(item.sku_id, item.quantity) for item in request.items])
-            await self._store.mark_unreserved(request.order_id)
         return event_timestamp()
 
     async def fulfill(self, request: FulfillRequest) -> str:
-        if not await self._store.was_fulfilled(request.order_id):
+        if await self._store.try_mark_fulfilled(request.order_id):
             await self._skus.fulfill([(item.sku_id, item.quantity) for item in request.items])
-            await self._store.mark_fulfilled(request.order_id)
         return event_timestamp()
 
 
@@ -199,17 +192,17 @@ class InMemoryReserveStore:
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None:
         self._reserves.setdefault(idempotency_key, result)
 
-    async def was_unreserved(self, order_id: str) -> bool:
-        return order_id in self._unreserves
-
-    async def mark_unreserved(self, order_id: str) -> None:
+    async def try_mark_unreserved(self, order_id: str) -> bool:
+        if order_id in self._unreserves:
+            return False
         self._unreserves.add(order_id)
+        return True
 
-    async def was_fulfilled(self, order_id: str) -> bool:
-        return order_id in self._fulfills
-
-    async def mark_fulfilled(self, order_id: str) -> None:
+    async def try_mark_fulfilled(self, order_id: str) -> bool:
+        if order_id in self._fulfills:
+            return False
         self._fulfills.add(order_id)
+        return True
 
     async def aclose(self) -> None:
         return None
@@ -242,47 +235,25 @@ class PostgresReserveStore:
                 json.dumps(result),
             )
 
-    async def was_unreserved(self, order_id: str) -> bool:
+    async def try_mark_unreserved(self, order_id: str) -> bool:
         pool = await self._get_pool()
         async with pool.acquire() as connection:
             row = await connection.fetchval(
-                "SELECT 1 FROM unreserve_operations WHERE order_id = $1",
+                "INSERT INTO unreserve_operations (order_id) VALUES ($1) "
+                "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
                 UUID(order_id),
             )
         return row is not None
 
-    async def mark_unreserved(self, order_id: str) -> None:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            await connection.execute(
-                """
-                INSERT INTO unreserve_operations (order_id)
-                VALUES ($1)
-                ON CONFLICT (order_id) DO NOTHING
-                """,
-                UUID(order_id),
-            )
-
-    async def was_fulfilled(self, order_id: str) -> bool:
+    async def try_mark_fulfilled(self, order_id: str) -> bool:
         pool = await self._get_pool()
         async with pool.acquire() as connection:
             row = await connection.fetchval(
-                "SELECT 1 FROM fulfill_operations WHERE order_id = $1",
+                "INSERT INTO fulfill_operations (order_id) VALUES ($1) "
+                "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
                 UUID(order_id),
             )
         return row is not None
-
-    async def mark_fulfilled(self, order_id: str) -> None:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            await connection.execute(
-                """
-                INSERT INTO fulfill_operations (order_id)
-                VALUES ($1)
-                ON CONFLICT (order_id) DO NOTHING
-                """,
-                UUID(order_id),
-            )
 
     async def aclose(self) -> None:
         if self._pool is not None:
