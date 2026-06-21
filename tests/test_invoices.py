@@ -43,7 +43,7 @@ async def test_create_invoice_with_moderated_sku_returns_201(
 
     assert len(body["items"]) == 1
     item = body["items"][0]
-    UUID(item["id"])  # must be a valid UUID
+    UUID(item["id"])
     assert item["sku_id"] == sku.id
     assert item["quantity"] == 10
     assert item["accepted_quantity"] is None

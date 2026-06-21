@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS invoices (
     id uuid PRIMARY KEY,
     seller_id uuid NOT NULL,
     status text NOT NULL CHECK (
-        status IN ('CREATED', 'ACCEPTED', 'PARTIALLY_ACCEPTED', 'CANCELLED')
+        status IN ('PENDING', 'ACCEPTED', 'PARTIALLY_ACCEPTED', 'REJECTED')
     ),
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
