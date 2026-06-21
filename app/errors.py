@@ -39,6 +39,11 @@ class NotFound(ServiceError):
         super().__init__(404, "NOT_FOUND", message)
 
 
+class Conflict(ServiceError):
+    def __init__(self, message: str):
+        super().__init__(409, "CONFLICT", message)
+
+
 class ServiceUnavailable(ServiceError):
     def __init__(self, message: str = "Service temporarily unavailable"):
         super().__init__(503, "SERVICE_UNAVAILABLE", message)

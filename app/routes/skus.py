@@ -3,7 +3,7 @@ from __future__ import annotations
 from json import JSONDecodeError
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 
 from app.auth import seller_id_from_jwt
 from app.errors import InvalidRequest
@@ -40,3 +40,10 @@ async def update_sku(sku_id: str, request: Request) -> JSONResponse:
     payload = parse_sku_update(raw_payload)
     sku = await get_sku_service(request).update_sku(seller_id, sku_id, payload)
     return JSONResponse(status_code=200, content=to_sku_response(sku))
+
+
+@router.delete("/api/v1/skus/{sku_id}", status_code=204)
+async def delete_sku(sku_id: str, request: Request) -> Response:
+    seller_id = seller_id_from_jwt(request)
+    await get_sku_service(request).delete_sku(seller_id, sku_id)
+    return Response(status_code=204)

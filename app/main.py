@@ -91,7 +91,7 @@ def create_app(
     app.state.product_repository = repository
     app.state.sku_repository = sku_repo
     app.state.product_service = ProductService(repository, gateway, sku_repo, product_deletion)
-    app.state.sku_service = SkuService(repository, sku_repo, gateway)
+    app.state.sku_service = SkuService(repository, sku_repo, gateway, b2c)
     app.state.product_view_service = ProductViewService(repository, sku_repo)
     app.state.reserve_store = store
     app.state.inventory_service = InventoryService(sku_repo, store, b2c)
