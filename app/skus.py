@@ -106,6 +106,8 @@ class SkuRepository(Protocol):
 
     async def unreserve(self, items: Sequence[ReserveLine]) -> None: ...
 
+    async def fulfill(self, items: Sequence[ReserveLine]) -> None: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -264,6 +266,15 @@ class InMemorySkuRepository:
                 self._skus[sku_id] = replace(
                     sku,
                     active_quantity=sku.active_quantity + quantity,
+                    reserved_quantity=sku.reserved_quantity - quantity,
+                )
+
+    async def fulfill(self, items: Sequence[ReserveLine]) -> None:
+        for sku_id, quantity in items:
+            sku = self._skus.get(sku_id)
+            if sku is not None:
+                self._skus[sku_id] = replace(
+                    sku,
                     reserved_quantity=sku.reserved_quantity - quantity,
                 )
 
@@ -471,6 +482,22 @@ class PostgresSkuRepository:
                         """
                         UPDATE skus SET
                             active_quantity = active_quantity + $2,
+                            reserved_quantity = reserved_quantity - $2,
+                            updated_at = now()
+                        WHERE id = $1
+                        """,
+                        UUID(sku_id),
+                        quantity,
+                    )
+
+    async def fulfill(self, items: Sequence[ReserveLine]) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                for sku_id, quantity in items:
+                    await connection.execute(
+                        """
+                        UPDATE skus SET
                             reserved_quantity = reserved_quantity - $2,
                             updated_at = now()
                         WHERE id = $1

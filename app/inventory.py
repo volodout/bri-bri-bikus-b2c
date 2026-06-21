@@ -30,6 +30,12 @@ class UnreserveRequest:
     items: tuple[ReserveItem, ...]
 
 
+@dataclass(frozen=True)
+class FulfillRequest:
+    order_id: str
+    items: tuple[ReserveItem, ...]
+
+
 @dataclass
 class ReserveResponse:
     reserved: bool
@@ -73,6 +79,10 @@ class ReserveStore(Protocol):
     async def was_unreserved(self, order_id: str) -> bool: ...
 
     async def mark_unreserved(self, order_id: str) -> None: ...
+
+    async def was_fulfilled(self, order_id: str) -> bool: ...
+
+    async def mark_fulfilled(self, order_id: str) -> None: ...
 
     async def aclose(self) -> None: ...
 
@@ -136,6 +146,12 @@ class InventoryService:
             await self._store.mark_unreserved(request.order_id)
         return event_timestamp()
 
+    async def fulfill(self, request: FulfillRequest) -> str:
+        if not await self._store.was_fulfilled(request.order_id):
+            await self._skus.fulfill([(item.sku_id, item.quantity) for item in request.items])
+            await self._store.mark_fulfilled(request.order_id)
+        return event_timestamp()
+
 
 class RecordingB2CGateway:
     """In-memory B2C gateway used in tests; records every stock event."""
@@ -175,6 +191,7 @@ class InMemoryReserveStore:
     def __init__(self) -> None:
         self._reserves: dict[str, dict[str, Any]] = {}
         self._unreserves: set[str] = set()
+        self._fulfills: set[str] = set()
 
     async def get_reserve(self, idempotency_key: str) -> dict[str, Any] | None:
         return self._reserves.get(idempotency_key)
@@ -187,6 +204,12 @@ class InMemoryReserveStore:
 
     async def mark_unreserved(self, order_id: str) -> None:
         self._unreserves.add(order_id)
+
+    async def was_fulfilled(self, order_id: str) -> bool:
+        return order_id in self._fulfills
+
+    async def mark_fulfilled(self, order_id: str) -> None:
+        self._fulfills.add(order_id)
 
     async def aclose(self) -> None:
         return None
@@ -240,6 +263,27 @@ class PostgresReserveStore:
                 UUID(order_id),
             )
 
+    async def was_fulfilled(self, order_id: str) -> bool:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            row = await connection.fetchval(
+                "SELECT 1 FROM fulfill_operations WHERE order_id = $1",
+                UUID(order_id),
+            )
+        return row is not None
+
+    async def mark_fulfilled(self, order_id: str) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            await connection.execute(
+                """
+                INSERT INTO fulfill_operations (order_id)
+                VALUES ($1)
+                ON CONFLICT (order_id) DO NOTHING
+                """,
+                UUID(order_id),
+            )
+
     async def aclose(self) -> None:
         if self._pool is not None:
             await self._pool.close()
@@ -267,6 +311,15 @@ def parse_unreserve_request(payload: Any) -> UnreserveRequest:
     if not isinstance(payload, Mapping):
         raise InvalidRequest("Request body must be a JSON object")
     return UnreserveRequest(
+        order_id=_required_uuid(payload, "order_id"),
+        items=_parse_items(payload.get("items")),
+    )
+
+
+def parse_fulfill_request(payload: Any) -> FulfillRequest:
+    if not isinstance(payload, Mapping):
+        raise InvalidRequest("Request body must be a JSON object")
+    return FulfillRequest(
         order_id=_required_uuid(payload, "order_id"),
         items=_parse_items(payload.get("items")),
     )
