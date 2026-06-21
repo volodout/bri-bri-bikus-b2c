@@ -76,10 +76,6 @@ class ReserveStore(Protocol):
 
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None: ...
 
-    async def try_mark_unreserved(self, order_id: str) -> bool: ...
-
-    async def try_mark_fulfilled(self, order_id: str) -> bool: ...
-
     async def aclose(self) -> None: ...
 
 
@@ -136,13 +132,11 @@ class InventoryService:
         return ReserveResponse(reserved=True, order_id=request.order_id, reserved_at=reserved_at)
 
     async def unreserve(self, request: UnreserveRequest) -> str:
-        if await self._store.try_mark_unreserved(request.order_id):
-            await self._skus.unreserve([(item.sku_id, item.quantity) for item in request.items])
+        await self._skus.unreserve(request.order_id, [(item.sku_id, item.quantity) for item in request.items])
         return event_timestamp()
 
     async def fulfill(self, request: FulfillRequest) -> str:
-        if await self._store.try_mark_fulfilled(request.order_id):
-            await self._skus.fulfill([(item.sku_id, item.quantity) for item in request.items])
+        await self._skus.fulfill(request.order_id, [(item.sku_id, item.quantity) for item in request.items])
         return event_timestamp()
 
 
@@ -183,26 +177,12 @@ class HttpB2CGateway:
 class InMemoryReserveStore:
     def __init__(self) -> None:
         self._reserves: dict[str, dict[str, Any]] = {}
-        self._unreserves: set[str] = set()
-        self._fulfills: set[str] = set()
 
     async def get_reserve(self, idempotency_key: str) -> dict[str, Any] | None:
         return self._reserves.get(idempotency_key)
 
     async def save_reserve(self, idempotency_key: str, result: dict[str, Any]) -> None:
         self._reserves.setdefault(idempotency_key, result)
-
-    async def try_mark_unreserved(self, order_id: str) -> bool:
-        if order_id in self._unreserves:
-            return False
-        self._unreserves.add(order_id)
-        return True
-
-    async def try_mark_fulfilled(self, order_id: str) -> bool:
-        if order_id in self._fulfills:
-            return False
-        self._fulfills.add(order_id)
-        return True
 
     async def aclose(self) -> None:
         return None
@@ -234,26 +214,6 @@ class PostgresReserveStore:
                 UUID(idempotency_key),
                 json.dumps(result),
             )
-
-    async def try_mark_unreserved(self, order_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            row = await connection.fetchval(
-                "INSERT INTO unreserve_operations (order_id) VALUES ($1) "
-                "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
-                UUID(order_id),
-            )
-        return row is not None
-
-    async def try_mark_fulfilled(self, order_id: str) -> bool:
-        pool = await self._get_pool()
-        async with pool.acquire() as connection:
-            row = await connection.fetchval(
-                "INSERT INTO fulfill_operations (order_id) VALUES ($1) "
-                "ON CONFLICT (order_id) DO NOTHING RETURNING 1",
-                UUID(order_id),
-            )
-        return row is not None
 
     async def aclose(self) -> None:
         if self._pool is not None:
