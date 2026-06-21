@@ -297,6 +297,7 @@ class ProductService:
         offset: int = 0,
         status: str | None = None,
         search: str | None = None,
+        include_deleted: bool = False,
     ) -> dict[str, Any]:
         limit = _clamp_list_limit(limit)
         offset = max(0, offset)
@@ -310,7 +311,7 @@ class ProductService:
         products = [
             product
             for product in await self._repository.list_products()
-            if product.seller_id == seller_id and not product.deleted
+            if product.seller_id == seller_id and (include_deleted or not product.deleted)
         ]
         if status_filter is not None:
             products = [product for product in products if product.status == status_filter]
@@ -753,19 +754,19 @@ def to_product_response(product: Product) -> dict[str, Any]:
 
 def _seller_list_item(product: Product, skus: Iterable[Any]) -> dict[str, Any]:
     skus = tuple(skus)
+    prices = [sku.price for sku in skus if hasattr(sku, "price")]
     return {
         "id": product.id,
         "title": product.title,
+        "slug": product.slug,
         "status": product.status.value,
+        "category_id": product.category.id,
         "deleted": product.deleted,
-        "category": {"id": product.category.id, "name": product.category.name},
-        "images": [
-            {"id": image.id, "url": image.url, "ordering": image.ordering}
-            for image in product.images
-        ],
+        "created_at": _serialize_datetime(product.created_at),
+        "min_price": min(prices) if prices else None,
+        "cover_image": product.images[0].url if product.images else None,
         "skus_count": len(skus),
         "total_active_quantity": sum(int(getattr(sku, "active_quantity", 0)) for sku in skus),
-        "created_at": _serialize_datetime(product.created_at),
     }
 
 

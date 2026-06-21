@@ -33,6 +33,7 @@ async def list_products(
     offset: int = 0,
     status: str | None = None,
     search: str | None = None,
+    include_deleted: bool = False,
 ) -> JSONResponse:
     seller_id = seller_id_from_jwt(request)
     result = await get_product_service(request).list_seller_products(
@@ -41,6 +42,7 @@ async def list_products(
         offset=offset,
         status=status,
         search=search,
+        include_deleted=include_deleted,
     )
     return JSONResponse(status_code=200, content=result)
 
