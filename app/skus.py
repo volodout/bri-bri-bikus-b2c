@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Mapping, Protocol, Sequence
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
-from app.errors import Forbidden, InvalidRequest, NotFound
+from app.errors import Conflict, Forbidden, InvalidRequest, NotFound
 from app.moderation import ModerationGateway, ProductEvent, event_timestamp
 from app.products import (
     CharacteristicValue,
@@ -108,6 +108,8 @@ class SkuRepository(Protocol):
 
     async def fulfill(self, order_id: str, items: Sequence[ReserveLine]) -> bool: ...
 
+    async def delete_sku(self, sku_id: str) -> None: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -126,6 +128,10 @@ def _transition_for(status: ProductStatus) -> tuple[ProductStatus, str] | None:
     return None
 
 
+class B2CGateway(Protocol):
+    async def publish_stock_event(self, event: Any) -> None: ...
+
+
 class SkuService:
     # Creating/editing a SKU spans two aggregates: it reads/writes the product
     # (status) and writes the SKU itself, so the service coordinates two repos.
@@ -134,10 +140,12 @@ class SkuService:
         product_repository: ProductRepository,
         sku_repository: SkuRepository,
         moderation: ModerationGateway,
+        b2c: B2CGateway,
     ) -> None:
         self._products = product_repository
         self._skus = sku_repository
         self._moderation = moderation
+        self._b2c = b2c
 
     async def create_sku(self, seller_id: str, payload: SkuCreate) -> Sku:
         product = await self._products.get_product(payload.product_id)
@@ -213,6 +221,49 @@ class SkuService:
         # Editing a SKU returns the parent product to moderation.
         await remoderate_on_edit(product, self._products, self._moderation)
         return saved
+
+    async def delete_sku(self, seller_id: str, sku_id: str) -> None:
+        if not _is_uuid(sku_id):
+            raise NotFound("SKU not found")
+        sku = await self._skus.get_sku(sku_id)
+        if sku is None:
+            raise NotFound("SKU not found")
+        product = await self._products.get_product(sku.product_id)
+        if product is None:
+            raise NotFound("Product not found")
+        ensure_owner(product, seller_id)
+        if product.status == ProductStatus.HARD_BLOCKED:
+            raise Forbidden("Cannot delete SKU of a hard-blocked product")
+        if sku.reserved_quantity > 0:
+            raise Conflict("SKU has active reservations and cannot be deleted")
+
+        if product.status == ProductStatus.MODERATED and sku.active_quantity > 0:
+            from app.inventory import StockEvent
+            await self._b2c.publish_stock_event(
+                StockEvent(
+                    event="SKU_OUT_OF_STOCK",
+                    sku_id=sku.id,
+                    product_id=sku.product_id,
+                    available_quantity=0,
+                )
+            )
+
+        await self._skus.delete_sku(sku.id)
+
+        remaining = await self._skus.list_skus(product.id)
+        if not remaining and product.status == ProductStatus.ON_MODERATION:
+            await self._products.update_product_status(product.id, ProductStatus.CREATED)
+            after = replace(product, status=ProductStatus.CREATED)
+            await self._moderation.publish_product_event(
+                ProductEvent(
+                    idempotency_key=str(uuid4()),
+                    product_id=product.id,
+                    seller_id=product.seller_id,
+                    event="DELETED",
+                    date=event_timestamp(),
+                    json_after=to_product_response(after),
+                )
+            )
 
 
 class InMemorySkuRepository:
@@ -290,6 +341,9 @@ class InMemorySkuRepository:
                 self._skus[sku_id] = replace(sku, reserved_quantity=sku.reserved_quantity - quantity)
         self._fulfilled_orders.add(order_id)
         return True
+
+    async def delete_sku(self, sku_id: str) -> None:
+        self._skus.pop(sku_id, None)
 
     async def aclose(self) -> None:
         return None
@@ -538,6 +592,11 @@ class PostgresSkuRepository:
                             f"SKU {sku_id}: insufficient reserved quantity"
                         )
         return True
+
+    async def delete_sku(self, sku_id: str) -> None:
+        pool = await self._get_pool()
+        async with pool.acquire() as connection:
+            await connection.execute("DELETE FROM skus WHERE id = $1", UUID(sku_id))
 
     async def aclose(self) -> None:
         if self._pool is not None:
